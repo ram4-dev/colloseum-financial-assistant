@@ -1,0 +1,24 @@
+# Local Pi runtime state
+.atl/
+.codegraph/
+
+node_modules/
+dist/
+.env
+.env.arc-demo.local
+.local/arc-demo/
+.cache/
+*.log
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+
+# Supabase CLI runtime metadata
+supabase/.branches/
+supabase/.temp/
+
+# Voice eval dataset (downloaded audio, never committed)
+evals/voice/.audio/
+
+# local model cache from arc provider experiments
+recipient-memory-model/

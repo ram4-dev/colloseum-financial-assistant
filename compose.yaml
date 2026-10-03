@@ -1,0 +1,156 @@
+services:
+  db:
+    restart: unless-stopped
+    image: pgvector/pgvector:0.8.1-pg16
+    environment:
+      POSTGRES_DB: wdk_agent
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - recipient_memory_postgres:/var/lib/postgresql/data
+      - ./docker/init/001-recipient-app.sql:/docker-entrypoint-initdb.d/001-recipient-app.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wdk_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    command: --config /etc/livekit.yaml
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./docker/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "127.0.0.1:7882:7880" # WebSocket/RTC signaling (TCP); 7882 avoids the user ssh tunnel squatting on 127.0.0.1:7880
+      - "7881-7891:7881-7891/udp" # RTC media (UDP)
+      - "7881:7881/tcp" # ICE-TCP fallback for the host browser
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  # Local full-stack dev experience: one `docker compose --profile dev up`
+  # starts Postgres + the API. Kept behind `profiles: [dev]` so the CI/tests
+  # command `docker compose up -d db` keeps starting only the database.
+  backend:
+    restart: unless-stopped
+    profiles: ["dev"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Bake the recipient-memory embedding model into the image:
+        #   EMBED_MODEL_PREFETCH=1 docker compose --profile dev up -d --build
+        EMBED_MODEL_PREFETCH: "${EMBED_MODEL_PREFETCH:-0}"
+    # Live voice / provider secrets (LIVEKIT_*, OPENAI_*, binding keys) come
+    # from the git-ignored root .env; the explicit environment below
+    # overrides anything it sets for the local stack (DB, fixture mode).
+    env_file:
+      - .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      DATABASE_URL: "postgresql://postgres@db:5432/wdk_agent?options=-csearch_path%3Dpublic,extensions"
+      DEMO_USER_ID: "00000000-0000-4000-8000-000000000001"
+      # Wallet source is interpolable so the git-ignored .env opts into
+      # live WDK explicitly; the compose default stays fixture (repo rule).
+      WDK_TOOLS_SOURCE: "${WDK_TOOLS_SOURCE:-fixture}"
+      WDK_NETWORK: "${WDK_NETWORK:-sepolia}"
+      WDK_TOKEN: "${WDK_TOKEN:-USDT}"
+      WDK_WALLET_NAME: "${WDK_WALLET_NAME:-agent-dev}"
+      WDK_MAX_TRANSFER_AMOUNT: "${WDK_MAX_TRANSFER_AMOUNT:-}"
+      WDK_ALLOWED_RECIPIENTS: "${WDK_ALLOWED_RECIPIENTS:-}"
+      RECIPIENT_MEMORY_ENABLED: "true"
+      RECIPIENT_MEMORY_SEED_FILE: "examples/recipient-memory.seed.json"
+      LIVE_VOICE_ENABLED: "true"
+      AGENT_RUNTIME: "${AGENT_RUNTIME:-llm}"
+      OPENCODE_GO_API_KEY: "${OPENCODE_GO_API_KEY:-}"
+      # Host WDK wallet store + daemon socket (the agent wallet is unlocked
+      # by a human via docker exec, never by agents).
+      XDG_CONFIG_HOME: "/wdk-config"
+      # Sign room tokens against the self-hosted server over the compose
+      # network; LIVEKIT_BROWSER_URL (browser-facing URL) comes from the
+      # git-ignored .env and must stay ws://localhost:7880 so the browser
+      # connects to the loopback-published livekit service.
+      LIVEKIT_URL: "${LIVEKIT_DOCKER_URL:-ws://livekit:7880}"
+      LIVEKIT_BROWSER_URL: "${LIVEKIT_BROWSER_URL:-ws://localhost:7880}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-}"
+    volumes:
+      - wdk_config:/wdk-config
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["api"]
+
+  # LiveKit voice worker — same image, different entrypoint. Gated behind
+  # `profiles: [worker]` so it is never started by the dev profile. The worker
+  # reads required env from the shell and fails closed (throws at startup) if
+  # any required value is absent.
+  voice-worker:
+    restart: unless-stopped
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        EMBED_MODEL_PREFETCH: "${EMBED_MODEL_PREFETCH:-0}"
+    # Same contract as backend: secrets from git-ignored .env; explicit
+    # environment wins for the local DB and fixture wallet mode.
+    env_file:
+      - .env
+    environment:
+      # Register with the self-hosted server over the compose network.
+      # LIVEKIT_API_KEY/SECRET, binding keys and OPENAI_API_KEY also come
+      # from the git-ignored .env via env_file.
+      LIVEKIT_URL: "${LIVEKIT_DOCKER_URL:-ws://livekit:7880}"
+      # Same local overrides as the backend: the git-ignored .env may point
+      # DATABASE_URL at host loopback, which is unreachable from inside the
+      # container — the compose db service is authoritative here.
+      DATABASE_URL: "postgresql://postgres@db:5432/wdk_agent?options=-csearch_path%3Dpublic,extensions"
+      DEMO_USER_ID: "00000000-0000-4000-8000-000000000001"
+      # Same interpolable wallet source as the backend (compose default fixture).
+      WDK_TOOLS_SOURCE: "${WDK_TOOLS_SOURCE:-fixture}"
+      WDK_NETWORK: "${WDK_NETWORK:-sepolia}"
+      WDK_TOKEN: "${WDK_TOKEN:-USDT}"
+      WDK_WALLET_NAME: "${WDK_WALLET_NAME:-agent-dev}"
+      WDK_MAX_TRANSFER_AMOUNT: "${WDK_MAX_TRANSFER_AMOUNT:-}"
+      WDK_ALLOWED_RECIPIENTS: "${WDK_ALLOWED_RECIPIENTS:-}"
+      RECIPIENT_MEMORY_ENABLED: "true"
+      RECIPIENT_MEMORY_SEED_FILE: "examples/recipient-memory.seed.json"
+      XDG_CONFIG_HOME: "/wdk-config"
+    volumes:
+      - wdk_config:/wdk-config
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["worker"]
+
+  wdk-daemon:
+    profiles: ["daemon"]
+    # The daemon exits cleanly when every unlocked session's TTL expires;
+    # restart so it is always up for the next unlock.
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Root on purpose: the daemon is the only process that reads the encrypted
+    # wallet store; backend/worker only connect to its socket. The daemon
+    # forces umask 077 around listen(), so a guard makes the socket/pid reachable
+    # by the unprivileged node user (store files stay root-only).
+    user: "0:0"
+    entrypoint: ["sh", "-c", "node node_modules/@tetherto/wdk-cli/bin/wdk-daemon.mjs & daemon=$$!; (while :; do [ -S /wdk-config/wdk-cli/daemon.sock ] && chmod 666 /wdk-config/wdk-cli/daemon.sock; [ -f /wdk-config/wdk-cli/daemon.pid ] && chmod 644 /wdk-config/wdk-cli/daemon.pid; sleep 0.5; done) & guard=$$!; wait $$daemon"]
+    environment:
+      XDG_CONFIG_HOME: "/wdk-config"
+    volumes:
+      - wdk_config:/wdk-config
+
+volumes:
+  recipient_memory_postgres:
+  wdk_config:

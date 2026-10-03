@@ -1,0 +1,334 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+  --radius-2xl: calc(var(--radius) + 16px);
+  --radius-3xl: calc(var(--radius) + 24px);
+  --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fredoka", "Nunito", sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-brand-ink: var(--brand-ink);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-surface: var(--warning-surface);
+  --color-warning-surface-foreground: var(--warning-surface-foreground);
+  --color-destructive-surface: var(--destructive-surface);
+  --color-destructive-surface-foreground: var(--destructive-surface-foreground);
+  --color-success-surface: var(--success-surface);
+  --color-success-surface-foreground: var(--success-surface-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+:root {
+  --radius: 1.5rem;
+  --background: #f4f1ea;
+  --foreground: #171717;
+  --card: #fdfbf8;
+  --card-foreground: #171717;
+  --popover: #fdfbf8;
+  --popover-foreground: #171717;
+  --primary: #684cf6;
+  --primary-foreground: #ffffff;
+  --primary-glow: #a996ff;
+  --brand-ink: #4631ba;
+  --secondary: #e7e3f0;
+  --secondary-foreground: #2f2b37;
+  --muted: #ebe8e3;
+  --muted-foreground: #5a5860;
+  --accent: #ede8ff;
+  --accent-foreground: #3f2cac;
+  --destructive: oklch(0.52 0.2 22);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.52 0.15 155);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.55 0.13 75);
+  --warning-foreground: oklch(1 0 0);
+
+  /* Superficies de estado: relleno solido, no alfa. El texto de cada una
+     pasa 7:1 sobre su propia superficie. */
+  --warning-surface: oklch(0.955 0.045 75);
+  --warning-surface-foreground: oklch(0.42 0.12 75);
+  --destructive-surface: oklch(0.955 0.045 22);
+  --destructive-surface-foreground: oklch(0.42 0.12 22);
+  --success-surface: oklch(0.955 0.045 155);
+  --success-surface-foreground: oklch(0.42 0.12 155);
+  --border: #c8c3d3;
+  --input: #c8c3d3;
+  --ring: #4631ba;
+
+  /* Sin relieve: la jerarquia la dan el borde y el relleno, no la sombra. */
+  --shadow-soft: none;
+}
+
+@layer base {
+  html {
+    font-size: 112.5%;
+    min-height: 100%;
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--ring);
+    outline-offset: 3px;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+}
+
+@supports (padding: max(0px)) {
+  main {
+    padding-top: max(3rem, env(safe-area-inset-top));
+  }
+
+  nav[aria-label="Navegación principal"] > div {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+}
+
+@utility surface-card {
+  background-color: var(--card);
+  border-radius: var(--radius-2xl);
+  border: 1px solid var(--border);
+}
+
+@utility plastic {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  border: 1px solid var(--primary);
+}
+
+@utility plastic-warm {
+  background-color: var(--secondary);
+  color: var(--secondary-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+}
+
+@utility press {
+  transition: opacity 120ms ease;
+  &:active {
+    opacity: 0.8;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.03) translateY(-6px);
+  }
+}
+
+@keyframes accountant-listen {
+  0%,
+  100% {
+    transform: translateY(2px) scale(0.985, 1.015);
+  }
+  50% {
+    transform: translateY(-5px) scale(1.035, 0.975);
+  }
+}
+
+@utility breathe {
+  animation: breathe 4.5s ease-in-out infinite;
+}
+
+.nani-avatar-frame {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid color-mix(in oklch, var(--primary) 34%, white);
+  border-radius: 999px;
+  background:
+    radial-gradient(
+      circle at 50% 45%,
+      color-mix(in oklch, white 88%, transparent) 0 42%,
+      transparent 70%
+    ),
+    linear-gradient(155deg, color-mix(in oklch, var(--secondary) 72%, white), white);
+}
+
+.nani-avatar-frame::after {
+  position: absolute;
+  z-index: -1;
+  right: 12%;
+  bottom: 8%;
+  left: 12%;
+  height: 20%;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--primary) 18%, transparent);
+  filter: blur(18px);
+  content: "";
+}
+
+.nani-avatar-image {
+  position: absolute;
+  max-width: none;
+  object-fit: contain;
+  object-position: center bottom;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 10px 10px color-mix(in oklch, var(--primary) 14%, transparent));
+  transform-origin: center bottom;
+}
+
+.nani-avatar-image--lista {
+  right: -4%;
+  bottom: -9%;
+  width: 108%;
+  height: 108%;
+}
+
+.nani-avatar-image--escuchando {
+  right: -3%;
+  bottom: -5%;
+  width: 106%;
+  height: 106%;
+}
+
+.nani-avatar-image--pensando {
+  right: -5%;
+  bottom: -7%;
+  width: 110%;
+  height: 110%;
+}
+
+.agent-stage.listening .breathe {
+  animation: accountant-listen 1.15s ease-in-out infinite;
+}
+
+.agent-stage--speaking .nani-avatar-frame {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 6px color-mix(in oklch, var(--primary) 16%, transparent);
+}
+
+.agent-stage--muted .nani-avatar-frame,
+.agent-stage--paused .nani-avatar-frame {
+  filter: saturate(0.72);
+  opacity: 0.86;
+}
+
+.agent-stage--reconnecting .nani-avatar-frame {
+  border-style: dashed;
+  border-color: var(--brand-ink);
+}
+
+.agent-stage--failed .nani-avatar-frame {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 6px color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+
+.agent-stage .nani-avatar-frame {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+@keyframes wave {
+  to {
+    height: 27px;
+  }
+}
+
+.sound-waves {
+  position: absolute;
+  z-index: 2;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in oklch, var(--primary) 24%, white);
+  border-radius: 999px;
+  background: color-mix(in oklch, white 88%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.sound-waves i {
+  width: 4px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--primary);
+  animation: wave 0.8s ease-in-out infinite alternate;
+}
+
+.sound-waves i:nth-child(2),
+.sound-waves i:nth-child(4) {
+  animation-delay: 0.2s;
+}
+
+.sound-waves i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+[data-sonner-toast],
+[data-sonner-toast] [data-description] {
+  font-size: 1rem !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .breathe,
+  .agent-stage.listening .breathe,
+  .sound-waves i {
+    animation: none;
+  }
+
+  .press,
+  .press:active {
+    transition: none;
+    transform: none;
+  }
+
+  .agent-stage--speaking .nani-avatar-frame,
+  .agent-stage--reconnecting .nani-avatar-frame,
+  .agent-stage--failed .nani-avatar-frame {
+    box-shadow: none;
+  }
+}

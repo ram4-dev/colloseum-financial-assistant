@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  Project: Nana Wallet, Aleph Hackathon.
+  Repository state: Node.js TypeScript Fastify backend plus independent React/TanStack frontend in apps/nana-wallet, connected only by HTTP.
+  Stack: Node.js, TypeScript, Fastify, AI SDK Core, @ai-sdk/mcp, WDK, Vitest.
+  Recipient-memory foundation: PostgreSQL 16 with pgvector, pg, and Transformers.js.
+  Canonical planning document: docs/architecture.md.
+  Artifact persistence: OpenSpec files under openspec/.
+  Strict TDD is disabled until a test runner and implementation workspace exist.
+
+strict_tdd: false
+
+testing:
+  status: available
+  test_command: "npm test"
+  framework: Vitest
+  unit: true
+  integration: true
+  e2e: true
+  coverage: false
+  coverage_command: ""
+  linter: false
+  lint_command: ""
+  type_checker: true
+  typecheck_command: "npm run typecheck"
+  formatter: false
+  format_command: ""
+  notes: "Database integration requires the local pgvector compose service; WDK E2E is opt-in through WDK_E2E=1."
+
+rules:
+  proposal:
+    - Keep scope aligned with the approved change and Nana front/backend HTTP boundary in docs/architecture.md.
+    - Include a rollback plan for risky changes involving wallet or transaction behavior.
+  specs:
+    - Use Given/When/Then scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - Preserve the explicit demo boundary and testnet-only scope.
+  design:
+    - Document architecture decisions with rationale.
+    - Include sequence diagrams for conversational transfer and WDK tool flows.
+  tasks:
+    - Group work by phase and use hierarchical numbering.
+    - Keep tasks completable in one session.
+  apply:
+    guidelines:
+      - Follow the implementation plan and existing project conventions.
+      - Keep strict TDD disabled; use focused Vitest coverage and runtime harnesses.
+    tdd: false
+    test_command: "npm test"
+  verify:
+    test_command: "npm test"
+    build_command: "npm run build"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas into main specifications.

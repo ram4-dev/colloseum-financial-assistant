@@ -1,0 +1,59 @@
+import { describe, expect, it, vi } from 'vitest';
+
+// Hermetic: the local development .env may set WDK_TOOLS_SOURCE=live; these
+// tests exercise the fixture provider contract. The pins run before the server
+// import because dotenv evaluates the ambient .env during that import chain
+// and src/api/wallet.ts freezes NETWORK at module import time.
+vi.hoisted(() => {
+  process.env.WDK_TOOLS_SOURCE = 'fixture';
+  process.env.WDK_NETWORK = 'sepolia';
+  process.env.WDK_TOKEN = 'USDT';
+});
+
+import { buildServer } from '../../src/server.js';
+
+describe('wallet read endpoints', () => {
+  it('GET /v1/wallet/address returns the fixture address', async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: 'GET', url: '/v1/wallet/address' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ network: 'sepolia', address: expect.any(String) });
+    await app.close();
+  });
+
+  it('GET /v1/wallet/balance returns the fixture balance', async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: 'GET', url: '/v1/wallet/balance?network=sepolia&token=USDT' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      network: 'sepolia',
+      token: 'USDT',
+      balance: '42.5',
+    });
+    await app.close();
+  });
+
+  it('GET /v1/wallet/history returns fixture transactions', async () => {
+    const app = buildServer();
+    const response = await app.inject({ method: 'GET', url: '/v1/wallet/history?network=sepolia' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.network).toBe('sepolia');
+    expect(Array.isArray(body.transactions)).toBe(true);
+    expect(body.transactions.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it.each([
+    '/v1/wallet/balance?network=',
+    '/v1/wallet/balance?network=sepolia&token=%20%20',
+    '/v1/wallet/history?network=%20%20',
+    '/v1/wallet/history?network=sepolia&token=',
+  ])('rejects empty wallet query fields: %s', async (url) => {
+    const app = buildServer();
+    const response = await app.inject({ method: 'GET', url });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ status: 'error', code: 'invalid_query' });
+    await app.close();
+  });
+});
