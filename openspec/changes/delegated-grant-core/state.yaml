@@ -1,0 +1,25 @@
+schema: sdd-state/v1
+change: delegated-grant-core
+artifact_store: openspec
+delivery_strategy: exception-ok
+updated_at: 2026-10-03
+phases:
+  init: completed
+  explore: completed
+  propose: completed
+  spec: completed
+  design: completed
+  tasks: completed
+  apply: not_started
+  verify: not_started
+  archive: not_started
+notes: >
+  Slice 1 of the approved plan at
+  .agent-workflow/tasks/financial-assistant-development/01-propuesta-plan.md
+  (G0 approved 2026-10-03). User decisions bound: D-2 embedded wallets (one
+  per user), D-3 authenticated HTTP grant channel (never voice), D-4 hybrid
+  Privy policies + Postgres ledger (session keys discarded, evidence in
+  06-research-d4-privy-solana.md), D-6 one wallet, D-7 multi-execution within
+  cap/rolling window (ratifiable before Slice 3). Gate G4 (provider Solana
+  devnet support, verified dated primary sources) satisfied by the D-4
+  research.
