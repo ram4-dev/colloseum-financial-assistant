@@ -400,3 +400,41 @@ export type BalancesNotReadyData = {
 };
 
 export type BalancesData = BalancesReadyData | BalancesNotReadyData;
+
+// DGC-5: delegated grants lifecycle (Slice 1). Mirror of the backend zod
+// schemas in src/contracts/http.ts — update BOTH sides in the same PR.
+// Amounts are decimal strings in the grant chain's smallest unit.
+export type DelegatedGrantAction = "transfer";
+
+export type DelegatedGrantState = "active" | "revoked" | "expired";
+
+export type DelegatedGrant = {
+  id: string;
+  walletId: string;
+  action: DelegatedGrantAction;
+  chain: string;
+  maxPerTransfer: string;
+  maxCumulative: string;
+  windowSeconds: number;
+  recipients: string[];
+  state: DelegatedGrantState;
+  policyReady: boolean;
+  createdAt: ISODateTime;
+  expiresAt: ISODateTime;
+  revokedAt: ISODateTime | null;
+};
+
+export type CreateDelegatedGrantRequest = {
+  walletId: string;
+  action: DelegatedGrantAction;
+  chain: string;
+  maxPerTransfer: string;
+  maxCumulative: string;
+  windowSeconds: number;
+  recipients: string[];
+  expiresAt: ISODateTime;
+};
+
+export type CreateDelegatedGrantResponse = { grant: DelegatedGrant };
+export type ListDelegatedGrantsResponse = { grants: DelegatedGrant[] };
+export type RevokeDelegatedGrantResponse = { grant: DelegatedGrant };

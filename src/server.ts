@@ -58,6 +58,8 @@ import {
   type PrivyWalletApiClient,
 } from "./wallet/privy-client.js";
 import { registerWalletsRoutes } from "./api/wallets.js";
+import { registerGrantsRoutes } from "./api/grants.js";
+import { DelegatedGrantService } from "./wallet/grants/consumption.js";
 import { readPrivyServerConfig } from "./config/privy-server.js";
 import { PrivyServerClient } from "./wallet/privy-server-client.js";
 import { createPrivyWalletHealthProvider } from "./wallet/privy-user-provider.js";

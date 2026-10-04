@@ -473,3 +473,58 @@ export const balancesDataSchema = z.discriminatedUnion("walletState", [
   balancesNotReadyDataSchema,
 ]);
 export type BalancesData = z.infer<typeof balancesDataSchema>;
+
+// DGC-5: delegated grants lifecycle (Slice 1). Amounts are decimal strings in
+// the grant chain's smallest unit (lamports for native SOL); never numbers.
+export const delegatedGrantActionSchema = z.literal("transfer");
+export type DelegatedGrantAction = z.infer<typeof delegatedGrantActionSchema>;
+
+export const delegatedGrantStateSchema = z.enum(["active", "revoked", "expired"]);
+export type DelegatedGrantState = z.infer<typeof delegatedGrantStateSchema>;
+
+export const delegatedGrantResponseSchema = z.object({
+  id: z.string().uuid(),
+  walletId: z.string().uuid(),
+  action: delegatedGrantActionSchema,
+  chain: z.string().min(1),
+  maxPerTransfer: z.string().regex(/^\d+$/),
+  maxCumulative: z.string().regex(/^\d+$/),
+  windowSeconds: z.number().int().positive(),
+  recipients: z.array(z.string().min(1)),
+  state: delegatedGrantStateSchema,
+  policyReady: z.boolean(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+});
+export type DelegatedGrantResponse = z.infer<typeof delegatedGrantResponseSchema>;
+
+export const createDelegatedGrantRequestSchema = z
+  .object({
+    walletId: z.string().uuid(),
+    action: delegatedGrantActionSchema,
+    chain: z.string().min(1),
+    maxPerTransfer: z.string().regex(/^\d+$/, "must be a plain decimal string"),
+    maxCumulative: z.string().regex(/^\d+$/, "must be a plain decimal string"),
+    windowSeconds: z.number().int().positive(),
+    recipients: z.array(z.string().min(1)).max(50),
+    // RFC 3339 timestamp; the grant MUST expire.
+    expiresAt: z.string().datetime(),
+  })
+  .strict();
+export type CreateDelegatedGrantRequest = z.infer<typeof createDelegatedGrantRequestSchema>;
+
+export const createDelegatedGrantResponseSchema = z.object({
+  grant: delegatedGrantResponseSchema,
+});
+export type CreateDelegatedGrantResponse = z.infer<typeof createDelegatedGrantResponseSchema>;
+
+export const listDelegatedGrantsResponseSchema = z.object({
+  grants: z.array(delegatedGrantResponseSchema),
+});
+export type ListDelegatedGrantsResponse = z.infer<typeof listDelegatedGrantsResponseSchema>;
+
+export const revokeDelegatedGrantResponseSchema = z.object({
+  grant: delegatedGrantResponseSchema,
+});
+export type RevokeDelegatedGrantResponse = z.infer<typeof revokeDelegatedGrantResponseSchema>;
