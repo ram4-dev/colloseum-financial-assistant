@@ -14,8 +14,25 @@ MUST NOT create, extend, modify, or revoke grants.
 - **When** they POST `/v1/grants` with a valid bounded grant
   (action, per-transfer cap, cumulative cap, rolling window, expiration,
   recipient allowlist)
-- **Then** the system persists an `active` grant scoped to that user and wallet,
-  appends an audit row `created`, and returns the grant representation
+- **Then** the server resolves the user's sole ready embedded wallet and
+  verifies its chain matches the request, persists an `active` grant scoped to
+  that user and wallet,
+  appends an audit row `created`, attempts provider policy sync, and returns the
+  grant representation with `policyReady` reflecting the sync outcome
+
+#### Scenario: Client cannot select another wallet
+
+- **Given** an authenticated user with a ready embedded wallet
+- **When** they POST `/v1/grants` with a client-supplied `walletId`
+- **Then** the strict request contract rejects the field and the server never
+  accepts wallet identity from the client
+
+#### Scenario: Grant creation requires exactly one ready wallet for its chain
+
+- **Given** an authenticated user with no ready wallet, multiple ready wallets,
+  or a ready wallet on another chain
+- **When** they POST `/v1/grants`
+- **Then** the server rejects creation without persisting a grant
 
 #### Scenario: Grant creation rejected without identity
 
@@ -119,20 +136,29 @@ executions SHALL require both the ledger validation to pass and the Privy policy
 to permit the transaction. A policy sync failure SHALL leave the grant
 non-executable (fail-closed).
 
-#### Scenario: Grant creation provisions the signer policy
+#### Scenario: Grant creation provisions the signer policy when an adapter is available
 
-- **Given** the D-4 hybrid decision and a created `active` grant
+- **Given** the D-4 hybrid decision, a created `active` grant, and an available
+  denomination-safe provider policy adapter
 - **When** the ledger processes policy sync
 - **Then** the delegated signer's Privy Solana policy reflects per-transfer max,
   recipient allowlist, and temporal window, and an audit row `policy_synced` is
   appended
 
+#### Scenario: Missing provider adapter leaves a grant non-executable
+
+- **Given** a created grant and no denomination-safe provider adapter
+- **When** the production server attempts policy sync
+- **Then** it appends `policy_sync_failed`, returns `policyReady: false`, and
+  refuses grant-covered execution until a provider policy is bound
+
 #### Scenario: Policy sync failure keeps execution blocked
 
 - **Given** a policy sync that fails (provider error)
 - **When** the sync outcome is recorded
-- **Then** the grant is left non-active, an audit row `policy_sync_failed` is
-  appended, and no grant-covered execution can proceed for it
+- **Then** an audit row `policy_sync_failed` is appended, `policyReady` remains
+  false, and no grant-covered execution can proceed for it (the lifecycle state
+  remains `active` because the grant is neither revoked nor expired)
 
 #### Scenario: Revocation removes policy enforcement surface
 

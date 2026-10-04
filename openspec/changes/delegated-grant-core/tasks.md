@@ -68,3 +68,20 @@
       error.
 - [x] 7.4 Confirm demo boundary unchanged: `WDK_TOOLS_SOURCE=fixture` default;
       no live keys touched; no voice path mutates grants.
+
+## Phase 8 — PR review remediation (2026-10-04)
+
+- [x] 8.1 Register authenticated grant routes in the production server and add
+      a production-builder regression scenario.
+- [x] 8.2 Resolve the user's sole ready wallet for the requested chain on the
+      server; reject client-supplied wallet identity and ambiguous/missing rows.
+- [x] 8.3 Wire post-commit policy sync to create/revoke; keep the Slice 1
+      provisioner fail-closed until the denomination-safe Solana adapter exists.
+- [x] 8.4 Enforce provider-policy readiness in both pure evaluation and atomic
+      consumption; audit rejected claims, preserve idempotent replay results,
+      and re-check expiry under the locked database row.
+- [x] 8.5 Mount the grants UI on the wallet page, add create/list/revoke MSW
+      behavior, and show pending policy state without claiming it is executable.
+- [x] 8.6 Add regression coverage for the review findings. Hermes owns execution
+      of all PR test, lint, typecheck, build, and E2E suites; results remain
+      pending in the PR review gate.

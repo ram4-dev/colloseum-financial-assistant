@@ -15,11 +15,17 @@ import {
   type ListDelegatedGrantsResponse,
   type RevokeDelegatedGrantResponse,
 } from "../contracts/http.js";
-import type { DelegatedGrantService, DelegatedGrantRow } from "../wallet/grants/consumption.js";
+import {
+  GrantWalletUnavailableError,
+  type DelegatedGrantService,
+  type DelegatedGrantRow,
+} from "../wallet/grants/consumption.js";
+import type { PrivyPolicySyncService } from "../wallet/grants/privy-policy-sync.js";
 import { PrivyIdentityError } from "../auth/privy-identity.js";
 
 export type GrantsRouteDependencies = {
   grants: DelegatedGrantService;
+  policySync: PrivyPolicySyncService;
   resolveUserId(request: FastifyRequest): Promise<string>;
 };
 
@@ -39,9 +45,9 @@ function toGrantResponse(grant: DelegatedGrantRow) {
     windowSeconds: grant.windowSeconds,
     recipients: grant.recipients,
     state: grant.state,
-    // The provider policy binding is the hybrid enforcement surface; a grant is
-    // policyReady only once its Privy policy has been provisioned (D-4).
-    policyReady: grant.providerPolicyId !== null,
+    // The provider policy binding is the hybrid enforcement surface; revoked or
+    // expired grants are never reported as executable even if cleanup remains.
+    policyReady: grant.state === "active" && grant.providerPolicyId !== null,
     createdAt: grant.createdAt.toISOString(),
     expiresAt: grant.expiresAt.toISOString(),
     revokedAt: grant.revokedAt ? grant.revokedAt.toISOString() : null,
@@ -89,9 +95,13 @@ export async function registerGrantsRoutes(
             },
           });
         }
-        const grant = await dependencies.grants.createGrant({
+        const walletId = await dependencies.grants.resolveWalletId(
           userId,
-          walletId: parsed.data.walletId,
+          parsed.data.chain,
+        );
+        const created = await dependencies.grants.createGrant({
+          userId,
+          walletId,
           action: parsed.data.action,
           chain: parsed.data.chain,
           maxPerTransfer: parsed.data.maxPerTransfer,
@@ -100,11 +110,26 @@ export async function registerGrantsRoutes(
           recipients: parsed.data.recipients,
           expiresAt: new Date(parsed.data.expiresAt),
         });
+        // Provisioning is deliberately after the ledger transaction commits.
+        // If the provider is unavailable, the grant remains visible but cannot
+        // execute because policyReady stays false.
+        await dependencies.policySync.syncGrant(
+          created.id,
+          userId,
+          created.walletId,
+        );
+        const grant = (await dependencies.grants.getGrant(created.id, userId)) ?? created;
         const data = { grant: toGrantResponse(grant) };
         createDelegatedGrantResponseSchema.parse(data);
         return { ok: true, data };
       } catch (error) {
         if (error instanceof PrivyIdentityError) throw error;
+        if (error instanceof GrantWalletUnavailableError) {
+          return reply.code(409).send({
+            ok: false,
+            error: { code: "wallet_unavailable", message: error.message },
+          });
+        }
         const invalid = validationError(error);
         if (invalid) return reply.code(400).send(invalid);
         return reply.code(500).send({
@@ -144,7 +169,12 @@ export async function registerGrantsRoutes(
         const { grantId } = request.params as { grantId: string };
         // RLS makes foreign grants invisible: revokeGrant throws not-active /
         // not-exists, indistinguishable from missing for the caller (404).
-        const grant = await dependencies.grants.revokeGrant(grantId, userId);
+        const revoked = await dependencies.grants.revokeGrant(grantId, userId);
+        // Ledger revocation is authoritative and remains committed even if the
+        // provider cannot remove its policy. The sync service records that
+        // failure; a retry can clean up the provider policy later.
+        await dependencies.policySync.syncRevocation(grantId, userId);
+        const grant = (await dependencies.grants.getGrant(grantId, userId)) ?? revoked;
         const data = { grant: toGrantResponse(grant) };
         revokeDelegatedGrantResponseSchema.parse(data);
         return { ok: true, data };

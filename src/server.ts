@@ -60,6 +60,10 @@ import {
 import { registerWalletsRoutes } from "./api/wallets.js";
 import { registerGrantsRoutes } from "./api/grants.js";
 import { DelegatedGrantService } from "./wallet/grants/consumption.js";
+import {
+  createUnavailableGrantPolicyProvisioner,
+  PrivyPolicySyncService,
+} from "./wallet/grants/privy-policy-sync.js";
 import { readPrivyServerConfig } from "./config/privy-server.js";
 import { PrivyServerClient } from "./wallet/privy-server-client.js";
 import { createPrivyWalletHealthProvider } from "./wallet/privy-user-provider.js";
@@ -181,6 +185,23 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
   });
 
   if (database) {
+    // DGC-4/D-4: grants use the Postgres ledger plus a provider policy. Slice 1
+    // has no denomination-safe Solana policy adapter yet, so provisioning
+    // fails closed and every grant remains non-executable until Slice 2 wires
+    // the WalletProvider adapter.
+    const grants = new DelegatedGrantService(database);
+    const grantPolicySync = new PrivyPolicySyncService(
+      database,
+      createUnavailableGrantPolicyProvisioner(
+        "Solana grant policy adapter is not available in Slice 1.",
+      ),
+    );
+    app.register(registerGrantsRoutes, {
+      grants,
+      policySync: grantPolicySync,
+      resolveUserId,
+    });
+
     const conversations = new PostgresConversationRepository(database);
     const financialTasks = new FinancialTaskRegistry();
     const memory =

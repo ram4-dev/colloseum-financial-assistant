@@ -35,12 +35,18 @@ function GrantCard({
         <span className="text-sm font-medium">Transferencias delegadas ({grant.chain})</span>
         <span
           className={
-            grant.state === "active"
+            grant.state === "active" && grant.policyReady
               ? "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800"
               : "rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
           }
         >
-          {grant.state === "active" ? "Activa" : grant.state === "revoked" ? "Revocada" : "Vencida"}
+          {grant.state === "revoked"
+            ? "Revocada"
+            : grant.state === "expired"
+              ? "Vencida"
+              : grant.policyReady
+                ? "Activa"
+                : "Pendiente de habilitación"}
         </span>
       </div>
       <dl className="mt-3 space-y-1 text-sm text-muted-foreground">
@@ -86,6 +92,9 @@ function GrantCard({
 export function DelegatedGrantsSection({ userId }: { userId: string | undefined }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [maxPerTransfer, setMaxPerTransfer] = useState("1000000");
+  const [maxCumulative, setMaxCumulative] = useState("5000000");
+  const [recipientInput, setRecipientInput] = useState("");
 
   const grantsQuery = useQuery({
     queryKey: queryKeys.grants(userId),
@@ -101,6 +110,51 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
     },
     onError: () => {
       setError("No pudimos revocar la autorización. Probá de nuevo en un ratito.");
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () => {
+      const recipients = recipientInput
+        .split(/[\s,]+/)
+        .map((recipient) => recipient.trim())
+        .filter(Boolean);
+      if (recipients.length === 0) {
+        throw new Error("Agregá al menos una dirección autorizada.");
+      }
+      if (!/^\d+$/.test(maxPerTransfer) || !/^\d+$/.test(maxCumulative)) {
+        throw new Error("Los límites deben ser números enteros positivos.");
+      }
+      if (
+        BigInt(maxPerTransfer) <= 0n ||
+        BigInt(maxCumulative) < BigInt(maxPerTransfer)
+      ) {
+        throw new Error(
+          "El tope acumulado debe ser igual o mayor que el máximo por transferencia.",
+        );
+      }
+      return api.createGrant({
+        action: "transfer",
+        chain: "solana",
+        maxPerTransfer,
+        maxCumulative,
+        windowSeconds: 86_400,
+        recipients,
+        expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      });
+    },
+    onSuccess: ({ grant }) => {
+      setError(null);
+      setRecipientInput("");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.grants(userId) });
+      if (!grant.policyReady) {
+        setError(
+          "La autorización quedó pendiente: el proveedor todavía no permite aplicar su política. No se ejecutará ninguna transferencia hasta habilitarla.",
+        );
+      }
+    },
+    onError: (cause) => {
+      setError(cause instanceof Error ? cause.message : "No pudimos crear la autorización.");
     },
   });
 
@@ -126,11 +180,11 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
 
   return (
     <section className="mt-6">
-      <h2 className="text-base font-semibold">Autorizaciones delegadas</h2>
+      <h2 className="text-base font-semibold">Autorizaciones delegadas en Solana</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Podés permitir que Nani haga transferencias dentro de un límite, sin confirmar cada vez.
-        Todo lo que exceda la autorización te pide confirmación como siempre. Podés revocar cuando
-        quieras.
+        Podés definir un límite y direcciones autorizadas. Solo una autorización habilitada por el
+        proveedor puede cubrir transferencias; las demás siempre requieren confirmación. Podés
+        revocar cuando quieras.
       </p>
       {error && (
         <p role="alert" className="mt-2 text-sm font-medium text-destructive">
@@ -154,6 +208,56 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
           ))}
         </div>
       )}
+      <details className="mt-4 rounded-xl border border-border p-4">
+        <summary className="cursor-pointer font-semibold">Crear autorización</summary>
+        <form
+          className="mt-3 space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setError(null);
+            createMutation.mutate();
+          }}
+        >
+          <label className="block text-sm font-medium">
+            Máximo por transferencia (unidad mínima)
+            <input
+              className="mt-1 w-full rounded-lg border border-border bg-background p-2"
+              inputMode="numeric"
+              value={maxPerTransfer}
+              onChange={(event) => setMaxPerTransfer(event.target.value)}
+              aria-label="Máximo por transferencia"
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Máximo acumulado por día (unidad mínima)
+            <input
+              className="mt-1 w-full rounded-lg border border-border bg-background p-2"
+              inputMode="numeric"
+              value={maxCumulative}
+              onChange={(event) => setMaxCumulative(event.target.value)}
+              aria-label="Máximo acumulado por día"
+            />
+          </label>
+          <label className="block text-sm font-medium">
+            Direcciones autorizadas
+            <textarea
+              className="mt-1 w-full rounded-lg border border-border bg-background p-2"
+              value={recipientInput}
+              onChange={(event) => setRecipientInput(event.target.value)}
+              aria-label="Direcciones autorizadas"
+              placeholder="Una dirección por línea"
+              rows={3}
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Vence en 7 días. La creación no habilita transferencias si la política del proveedor
+            todavía no está disponible.
+          </p>
+          <Button type="submit" disabled={createMutation.isPending}>
+            {createMutation.isPending ? "Creando…" : "Crear autorización"}
+          </Button>
+        </form>
+      </details>
     </section>
   );
 }

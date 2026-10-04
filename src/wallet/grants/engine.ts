@@ -53,6 +53,7 @@ export type GrantDegradeReason =
   | "action_not_covered"
   | "grant_revoked"
   | "grant_expired"
+  | "policy_not_ready"
   | "per_transfer_cap_exceeded"
   | "cumulative_cap_exceeded"
   | "recipient_not_allowed"
@@ -96,7 +97,13 @@ function addDecimals(a: string, b: string): string {
 
 /**
  * Evaluate one execution request against one grant. Order of checks is
- * deterministic and audited: identity of scope → lifecycle → caps → recipient.
+ * deterministic and audited: identity of scope → lifecycle → provider
+ * enforcement surface → caps → recipient.
+ *
+ * The provider check verifies that the enforcement surface EXISTS (the ledger
+ * holds a policy binding); whether the enclave ultimately permits the transfer is
+ * decided by the provider at broadcast time. A missing binding is therefore a local
+ * fail-closed degrade, never a silent pass.
  */
 export function evaluateGrant(
   grant: DelegatedGrantRecord,
@@ -111,6 +118,12 @@ export function evaluateGrant(
   }
   if (request.now >= grant.expiresAt) {
     return { decision: "degrade", reason: "grant_expired" };
+  }
+  // D-4 hybrid: both planes must hold. Without the provider policy binding the
+  // enclave would not enforce per-transfer max/allowlist, so the grant is not
+  // executable no matter how healthy the ledger row looks.
+  if (!grant.providerPolicyId) {
+    return { decision: "degrade", reason: "policy_not_ready" };
   }
   if (compareDecimals(request.amount, grant.maxPerTransfer) > 0) {
     return { decision: "degrade", reason: "per_transfer_cap_exceeded" };

@@ -501,7 +501,6 @@ export type DelegatedGrantResponse = z.infer<typeof delegatedGrantResponseSchema
 
 export const createDelegatedGrantRequestSchema = z
   .object({
-    walletId: z.string().uuid(),
     action: delegatedGrantActionSchema,
     chain: z.string().min(1),
     maxPerTransfer: z.string().regex(/^\d+$/, "must be a plain decimal string"),

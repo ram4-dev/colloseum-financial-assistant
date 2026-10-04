@@ -29,6 +29,12 @@ const WalletLifecycle = lazy(() =>
   })),
 );
 
+const DelegatedGrantsSection = lazy(() =>
+  import("@/features/wallet/DelegatedGrantsSection").then((module) => ({
+    default: module.DelegatedGrantsSection,
+  })),
+);
+
 export const Route = createFileRoute("/mi-plata")({
   head: () => ({
     meta: [
@@ -212,6 +218,14 @@ function MiPlataPage() {
       </Button>
 
       <ManageWalletSection userId={userId} />
+
+      <Suspense
+        fallback={
+          <p className="mt-6 text-sm text-muted-foreground">Cargando autorizaciones…</p>
+        }
+      >
+        <DelegatedGrantsSection userId={userId} />
+      </Suspense>
 
       <section className="mt-10 rounded-2xl border border-border bg-secondary p-5">
         <p className="text-base text-muted-foreground">

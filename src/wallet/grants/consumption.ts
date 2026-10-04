@@ -54,7 +54,19 @@ export type CreateGrantInput = {
 };
 
 export type ClaimConsumptionResult = {
+  /** True when budget was consumed by this call, including an idempotent replay. */
   consumed: boolean;
+  /**
+   * Present on an idempotency replay: the claim already existed, so the ORIGINAL
+   * result is returned instead of consuming a second time.
+   */
+  replay?: boolean;
+  /** Consumed amount: this claim's amount, or the original amount on a replay. */
+  amount?: string;
+  /**
+   * Rejection reason code. Every rejection that has a visible grant row also
+   * appends a `rejected` audit row inside the same transaction.
+   */
   reason?: string;
 };
 
@@ -88,7 +100,9 @@ function mapGrant(row: GrantSqlRow): DelegatedGrantRow {
     maxPerTransfer: row.max_per_transfer,
     maxCumulative: row.max_cumulative,
     windowSeconds: row.window_seconds,
-    recipients: Array.isArray(row.recipients) ? (row.recipients as string[]) : [],
+    recipients: Array.isArray(row.recipients)
+      ? (row.recipients as string[])
+      : [],
     state: row.state as DelegatedGrantRow["state"],
     providerPolicyId: row.provider_policy_id,
     createdAt: row.created_at,
@@ -129,10 +143,12 @@ export async function consumedInWindow(
     return result.rows[0]?.total ?? "0";
   }
   let total = "0";
-  await (database as DatabaseClient).withUserTransactionAnonymous(async (client) => {
-    const result = await run(client);
-    total = result.rows[0]?.total ?? "0";
-  });
+  await (database as DatabaseClient).withUserTransactionAnonymous(
+    async (client) => {
+      const result = await run(client);
+      total = result.rows[0]?.total ?? "0";
+    },
+  );
   return total;
 }
 
@@ -184,7 +200,34 @@ export async function appendGrantAudit(
 export class DelegatedGrantService {
   public constructor(private readonly database: DatabaseClient) {}
 
-  public async createGrant(input: CreateGrantInput): Promise<DelegatedGrantRow> {
+  /**
+   * Resolve the sole ready embedded wallet for this user's requested chain.
+   * Wallet identity is never selected by the client; ambiguity or absence
+   * fails closed under D-2's one-wallet model.
+   */
+  public async resolveWalletId(userId: string, chain: string): Promise<string> {
+    return this.database.withUserTransaction(userId, async (client) => {
+      const result = await client.query<{ id: string; chain_family: string }>(
+        `SELECT id, chain_family FROM user_wallets
+         WHERE user_id = $1 AND state = 'ready'
+         ORDER BY updated_at DESC
+         LIMIT 2`,
+        [userId],
+      );
+      if (result.rows.length !== 1 || result.rows[0]?.chain_family !== chain) {
+        throw new GrantWalletUnavailableError(
+          result.rows.length > 1
+            ? "More than one ready wallet is available for this user."
+            : `No ready ${chain} wallet is available for this user.`,
+        );
+      }
+      return result.rows[0]!.id;
+    });
+  }
+
+  public async createGrant(
+    input: CreateGrantInput,
+  ): Promise<DelegatedGrantRow> {
     return this.database.withUserTransaction(input.userId, (client) =>
       this.createGrantInTransaction(input, client),
     );
@@ -213,21 +256,18 @@ export class DelegatedGrantService {
       ],
     );
     const grant = mapGrant(result.rows[0]!);
-    // Ledger is the decision authority: policy sync is recorded in the same
-    // transaction so a grant is only visible once its enforcement surface exists.
     await client.query(
       `INSERT INTO grant_audit_log (grant_id, user_id, event, reason)
        VALUES ($1, $2, 'created', NULL)`,
       [grant.id, input.userId],
     );
-    // D-4: policy provisioning is exercised in Phase 4; the ledger records the
-    // sync outcome. Until then the grant is created with policy_synced pending
-    // the sync worker; covered execution additionally requires the Privy policy.
-    await client.query(
-      `INSERT INTO grant_audit_log (grant_id, user_id, event, reason)
-       VALUES ($1, $2, 'policy_synced', 'policy_sync_deferred_to_phase4')`,
-      [grant.id, input.userId],
-    );
+    // D-4 hybrid: provisioning the provider enforcement surface is a separate,
+    // post-commit step (PrivyPolicySyncService) because it performs provider I/O
+    // and must not run inside this transaction. Until it succeeds the grant has
+    // no provider_policy_id, so `policyReady` stays false and neither the engine
+    // nor claimConsumption will treat it as executable. This method therefore
+    // records NO policy_synced row: that event belongs exclusively to a real
+    // sync outcome.
     return grant;
   }
 
@@ -242,7 +282,10 @@ export class DelegatedGrantService {
     });
   }
 
-  public async getGrant(grantId: string, userId: string): Promise<DelegatedGrantRow | null> {
+  public async getGrant(
+    grantId: string,
+    userId: string,
+  ): Promise<DelegatedGrantRow | null> {
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<GrantSqlRow>(
         `SELECT ${GRANT_COLUMNS} FROM delegated_grants WHERE id = $1 AND user_id = $2`,
@@ -252,7 +295,10 @@ export class DelegatedGrantService {
     });
   }
 
-  public async revokeGrant(grantId: string, userId: string): Promise<DelegatedGrantRow> {
+  public async revokeGrant(
+    grantId: string,
+    userId: string,
+  ): Promise<DelegatedGrantRow> {
     return this.database.withUserTransaction(userId, async (client) => {
       // Serialize concurrent revoke/claim on the same grant.
       await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
@@ -266,7 +312,9 @@ export class DelegatedGrantService {
         [grantId, userId],
       );
       if (!result.rows[0]) {
-        throw new Error(`Grant ${grantId} is not active or does not exist for this user.`);
+        throw new Error(
+          `Grant ${grantId} is not active or does not exist for this user.`,
+        );
       }
       await client.query(
         `INSERT INTO grant_audit_log (grant_id, user_id, event)
@@ -278,11 +326,14 @@ export class DelegatedGrantService {
   }
 
   /**
-   * Atomically claim budget for one execution. Runs the engine-equivalent cap
-   * checks against a locked grant row and appends the `used` audit row in the
-   * SAME transaction, so two concurrent claims cannot both fit under a cap that
-   * only has room for one. Idempotency: a repeated idempotency key returns
-   * consumed:false without a second audit row (DB unique constraint).
+   * Atomically claim budget for one execution. Runs the cap checks against a
+   * locked grant row and appends the `used` audit row in the SAME transaction, so
+   * two concurrent claims cannot both fit under a cap that only has room for one.
+   * Idempotency: a repeated key returns the ORIGINAL result without a second audit
+   * row or consumption (DB unique constraint).
+   *
+   * Every rejection is audited in the same transaction with its reason code, so a
+   * refused execution is never invisible in the trail.
    */
   public async claimConsumption(input: {
     grantId: string;
@@ -296,55 +347,99 @@ export class DelegatedGrantService {
         `dgc-grant-${input.grantId}`,
       ]);
 
-      // Idempotency replay: the unique index on grant_id+idempotency_key in
-      // grant_claim_ledger decides; no second consumption, no second audit row.
-      const replay = await client.query<{ id: string }>(
-        `SELECT id FROM grant_claim_ledger
-         WHERE grant_id = $1 AND idempotency_key = $2`,
+      // Idempotency replay: the unique index on grant_id+idempotency_key decides.
+      // The original result is returned verbatim; no second consumption, no second
+      // audit row, no state mutation.
+      const replay = await client.query<{ amount: string }>(
+        `SELECT amount FROM grant_claim_ledger
+             WHERE grant_id = $1 AND idempotency_key = $2`,
         [input.grantId, input.idempotencyKey],
       );
-      if (replay.rows[0]) {
-        return { consumed: false, reason: "idempotency_replay" };
+      const replayed = replay.rows[0];
+      if (replayed) {
+        return {
+          consumed: true,
+          replay: true,
+          amount: normalizeDecimal(replayed.amount),
+        };
       }
 
       const grantResult = await client.query<GrantSqlRow>(
-        `SELECT ${GRANT_COLUMNS} FROM delegated_grants
-         WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+        `SELECT ${GRANT_COLUMNS}
+             FROM delegated_grants
+             WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [input.grantId, input.userId],
       );
       const grantRow = grantResult.rows[0];
       if (!grantRow) {
+        // RLS hides a foreign or missing grant, so there is no row to audit
+        // against and no state to reject.
         return { consumed: false, reason: "grant_not_found" };
       }
       const grant = mapGrant(grantRow);
+      const amount = normalizeDecimal(input.amount);
+
       if (grant.state !== "active") {
-        return { consumed: false, reason: "grant_revoked" };
+        const reason = grant.state === "expired" ? "grant_expired" : "grant_revoked";
+        await this.appendRejection(client, input, reason, amount);
+        return { consumed: false, reason };
+      }
+      // Expiration is re-checked on the LOCKED row against the DATABASE clock, so
+      // a grant that expired between the engine evaluation and this claim cannot
+      // slip through. clock_timestamp() is used instead of now(), which is fixed
+      // at transaction start and could be stale after waiting for the row lock.
+      // Per the spec, the grant state is not mutated here.
+      const expiry = await client.query<{ is_expired: boolean }>(
+        `SELECT expires_at <= clock_timestamp() AS is_expired
+         FROM delegated_grants WHERE id = $1 AND user_id = $2`,
+        [input.grantId, input.userId],
+      );
+      if (expiry.rows[0]?.is_expired) {
+        await this.appendRejection(client, input, "grant_expired", amount);
+        return { consumed: false, reason: "grant_expired" };
+      }
+      // D-4 hybrid: both planes must hold. Without the provider policy binding the
+      // enclave enforces nothing, so the ledger refuses to consume budget.
+      if (!grant.providerPolicyId) {
+        await this.appendRejection(client, input, "policy_not_ready", amount);
+        return { consumed: false, reason: "policy_not_ready" };
       }
 
-      const amount = normalizeDecimal(input.amount);
       const consumedResult = await client.query<{ total: string | null }>(
         `SELECT COALESCE(SUM(amount), 0)::text AS total FROM grant_audit_log
-         WHERE grant_id = $1 AND event = 'used' AND amount IS NOT NULL
-           AND created_at > $2`,
+             WHERE grant_id = $1 AND event = 'used' AND amount IS NOT NULL
+               AND created_at > $2`,
         [input.grantId, new Date(Date.now() - grant.windowSeconds * 1_000)],
       );
       const consumed = consumedResult.rows[0]?.total ?? "0";
       const projected = BigInt(consumed) + BigInt(amount);
       if (BigInt(amount) > BigInt(grant.maxPerTransfer)) {
+        await this.appendRejection(
+          client,
+          input,
+          "per_transfer_cap_exceeded",
+          amount,
+        );
         return { consumed: false, reason: "per_transfer_cap_exceeded" };
       }
       if (projected > BigInt(grant.maxCumulative)) {
+        await this.appendRejection(
+          client,
+          input,
+          "cumulative_cap_exceeded",
+          amount,
+        );
         return { consumed: false, reason: "cumulative_cap_exceeded" };
       }
 
       await client.query(
         `INSERT INTO grant_claim_ledger (grant_id, user_id, idempotency_key, amount)
-         VALUES ($1, $2, $3, $4)`,
+             VALUES ($1, $2, $3, $4)`,
         [input.grantId, input.userId, input.idempotencyKey, amount],
       );
       await client.query(
         `INSERT INTO grant_audit_log (grant_id, user_id, event, amount, detail)
-         VALUES ($1, $2, 'used', $3, $4)`,
+             VALUES ($1, $2, 'used', $3, $4)`,
         [
           input.grantId,
           input.userId,
@@ -352,7 +447,34 @@ export class DelegatedGrantService {
           JSON.stringify({ idempotencyKey: input.idempotencyKey }),
         ],
       );
-      return { consumed: true };
+      return { consumed: true, amount };
     });
+  }
+
+  /** Append the `rejected` audit row for one refused claim (same transaction). */
+  private async appendRejection(
+    client: Queryable,
+    input: { grantId: string; userId: string; idempotencyKey: string },
+    reason: string,
+    amount: string,
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO grant_audit_log (grant_id, user_id, event, reason, amount, detail)
+           VALUES ($1, $2, 'rejected', $3, $4, $5)`,
+      [
+        input.grantId,
+        input.userId,
+        reason,
+        amount,
+        JSON.stringify({ idempotencyKey: input.idempotencyKey }),
+      ],
+    );
+  }
+}
+
+export class GrantWalletUnavailableError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "GrantWalletUnavailableError";
   }
 }

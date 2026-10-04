@@ -128,7 +128,10 @@ grant_audit_log (append-only)
 5. **`src/api/grants.ts`** — `POST /v1/grants`, `GET /v1/grants`,
    `POST /v1/grants/:id/revoke`; identity via the configured
    `RequestIdentityProvider` (Privy bearer; demo mode caveat documented), pattern
-   of `src/api/wallets.ts`. Registered in `src/server.ts`.
+   of `src/api/wallets.ts`. Registered in `src/server.ts`. The request carries
+   authorization constraints but never a wallet ID; the server resolves the
+   sole ready user wallet under D-2, verifies its chain matches the request, and
+   fails closed on zero, multiple, or mismatched rows.
 6. **Contract** — `src/contracts/http.ts` zod schemas + hand-mirrored types in
    `apps/nana-wallet/src/lib/api-types.ts` (same PR, hard repo rule).
 7. **Frontend** — grants list + create/revoke UI (authenticated HTTP only; no
@@ -160,6 +163,9 @@ handles voice-side classification).
 - Every reject/allow appends audit BEFORE any on-chain side effect.
 - Demo boundary: fixture `WDK_TOOLS_SOURCE=fixture` unchanged; Privy policy sync
   is exercised on devnet only; unit/integration tests use a fake policy client.
+- Slice 1 has no denomination-safe Solana policy adapter. The production
+  provisioner therefore fails closed; a ledger row may remain lifecycle-active
+  but is non-executable until `provider_policy_id` is bound (`policyReady=false`).
 
 ## Open Questions (carried to apply/verify)
 

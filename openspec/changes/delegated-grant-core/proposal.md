@@ -100,7 +100,7 @@ This implements Slice 1 of the approved plan
 | Backend `src/api/grants.ts` (new) | New | Authenticated grant lifecycle endpoints |
 | Backend `src/contracts/http.ts` | Modified | Grant request/response schemas (mirrored same PR in front) |
 | Frontend `apps/nana-wallet/src/lib/api-types.ts` | Modified | Duplicated contract types (hard repo rule: same PR) |
-| Frontend grants UI (new feature module) | New | List/grant/revoke over HTTP; no voice path |
+| Frontend grants UI (new feature module) | New | List/create/revoke over HTTP; the server resolves the sole ready wallet; no voice path |
 | Privy integration `src/wallet/privy-*` | Modified | Policy create/rotate/revoke helpers for Solana signer policies |
 
 ## Rollback Plan

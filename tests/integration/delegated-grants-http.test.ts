@@ -8,6 +8,10 @@ import {
   type DatabaseClient,
 } from "../../src/db/client.js";
 import { DelegatedGrantService } from "../../src/wallet/grants/consumption.js";
+import {
+  createUnavailableGrantPolicyProvisioner,
+  PrivyPolicySyncService,
+} from "../../src/wallet/grants/privy-policy-sync.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -46,6 +50,10 @@ describe("delegated grants HTTP lifecycle (DGC-5)", () => {
     });
     void app.register(registerGrantsRoutes, {
       grants: service,
+      policySync: new PrivyPolicySyncService(
+        database,
+        createUnavailableGrantPolicyProvisioner("test provider unavailable"),
+      ),
       resolveUserId: async (request) => {
         const token = request.headers.authorization;
         if (token === "Bearer user-a") return userAId;
@@ -58,7 +66,6 @@ describe("delegated grants HTTP lifecycle (DGC-5)", () => {
 
   function validCreateBody() {
     return {
-      walletId: walletAId,
       action: "transfer",
       chain: "solana",
       maxPerTransfer: "1000000",
@@ -106,9 +113,25 @@ describe("delegated grants HTTP lifecycle (DGC-5)", () => {
         method: "POST",
         url: "/v1/grants",
         headers: { authorization: "Bearer user-a" },
-        payload: { ...validCreateBody(), dryRun: true },
+        payload: { ...validCreateBody(), walletId: walletAId },
       });
       expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed when the authenticated user has no ready wallet for the requested chain", async () => {
+    const app = createApp();
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/grants",
+        headers: { authorization: "Bearer user-b" },
+        payload: validCreateBody(),
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe("wallet_unavailable");
     } finally {
       await app.close();
     }
@@ -227,4 +250,3 @@ async function provisionWallet(database: DatabaseClient, userId: string): Promis
   );
   return result.rows[0]!.id;
 }
-

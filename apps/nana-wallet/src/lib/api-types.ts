@@ -425,7 +425,6 @@ export type DelegatedGrant = {
 };
 
 export type CreateDelegatedGrantRequest = {
-  walletId: string;
   action: DelegatedGrantAction;
   chain: string;
   maxPerTransfer: string;

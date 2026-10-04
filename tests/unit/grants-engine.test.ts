@@ -9,7 +9,9 @@ const NOW = Date.parse("2026-10-03T22:00:00.000Z");
 const RECIPIENT_OK = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 const RECIPIENT_OTHER = "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7ua4e6FjZg3Dq";
 
-function grant(overrides: Partial<DelegatedGrantRecord> = {}): DelegatedGrantRecord {
+function grant(
+  overrides: Partial<DelegatedGrantRecord> = {},
+): DelegatedGrantRecord {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     userId: "22222222-2222-4222-8222-222222222222",
@@ -21,7 +23,9 @@ function grant(overrides: Partial<DelegatedGrantRecord> = {}): DelegatedGrantRec
     windowSeconds: 86_400,
     recipients: [RECIPIENT_OK],
     state: "active",
-    providerPolicyId: null,
+    // D-4 hybrid: a grant-covered execution requires the provider enforcement
+    // surface to exist, so a fully-bound grant fixture carries its policy id.
+    providerPolicyId: "fixture_policy_grant",
     createdAt: NOW - 60_000,
     expiresAt: NOW + 7 * 86_400_000,
     revokedAt: null,
@@ -44,7 +48,9 @@ function request(
 
 describe("evaluateGrant (DGC-2, pure grant engine)", () => {
   it("covers an execution within all bounds", () => {
-    const decision = evaluateGrant(grant(), request(), { consumedInWindow: "0" });
+    const decision = evaluateGrant(grant(), request(), {
+      consumedInWindow: "0",
+    });
     expect(decision).toEqual({ decision: "covered" });
   });
 
@@ -78,11 +84,9 @@ describe("evaluateGrant (DGC-2, pure grant engine)", () => {
   });
 
   it("rejects an expired grant", () => {
-    const decision = evaluateGrant(
-      grant({ expiresAt: NOW - 1 }),
-      request(),
-      { consumedInWindow: "0" },
-    );
+    const decision = evaluateGrant(grant({ expiresAt: NOW - 1 }), request(), {
+      consumedInWindow: "0",
+    });
     expect(decision).toEqual({ decision: "degrade", reason: "grant_expired" });
   });
 
@@ -172,6 +176,39 @@ describe("evaluateGrant (DGC-2, pure grant engine)", () => {
       decision: "degrade",
       reason: "action_not_covered",
     });
+  });
+
+  it("fails closed when the grant has no provider policy binding (D-4 hybrid)", () => {
+    // The ledger row is active and within every cap, but the Privy enforcement
+    // surface was never provisioned: covered execution MUST NOT proceed.
+    const decision = evaluateGrant(
+      grant({ providerPolicyId: null }),
+      request(),
+      { consumedInWindow: "0" },
+    );
+    expect(decision).toEqual({
+      decision: "degrade",
+      reason: "policy_not_ready",
+    });
+  });
+
+  it("reports lifecycle reasons before policy readiness", () => {
+    // A revoked or expired grant degrades for the lifecycle reason even when the
+    // provider binding is also missing, so the audit reason stays actionable.
+    expect(
+      evaluateGrant(
+        grant({ providerPolicyId: null, state: "revoked", revokedAt: NOW - 1 }),
+        request(),
+        { consumedInWindow: "0" },
+      ),
+    ).toEqual({ decision: "degrade", reason: "grant_revoked" });
+    expect(
+      evaluateGrant(
+        grant({ providerPolicyId: null, expiresAt: NOW - 1 }),
+        request(),
+        { consumedInWindow: "0" },
+      ),
+    ).toEqual({ decision: "degrade", reason: "grant_expired" });
   });
 
   it("covers a second execution when the window has rolled past old usage", () => {

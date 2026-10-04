@@ -10,6 +10,10 @@ import {
   DelegatedGrantService,
   type DelegatedGrantRow,
 } from "../../src/wallet/grants/consumption.js";
+import {
+  PrivyPolicySyncService,
+  type GrantPolicyProvisioner,
+} from "../../src/wallet/grants/privy-policy-sync.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
@@ -19,9 +23,18 @@ const WINDOW_SECONDS = 3_600;
 const MAX_PER_TRANSFER = "1_000_000";
 const MAX_CUMULATIVE = "5_000_000";
 
-async function provisionUser(
-  database: DatabaseClient,
-): Promise<string> {
+function fakeProvisioner(): GrantPolicyProvisioner {
+  return {
+    async provisionPolicy(input) {
+      return { policyId: `policy-${input.grantId.slice(0, 8)}` };
+    },
+    async revokePolicy() {
+      // No provider side effect in this fixture.
+    },
+  };
+}
+
+async function provisionUser(database: DatabaseClient): Promise<string> {
   const result = await database.query<{ id: string }>(
     `INSERT INTO users (privy_did, display_name)
      VALUES ($1, $2) ON CONFLICT (privy_did) DO UPDATE SET last_seen_at = now()
@@ -56,7 +69,15 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     await database.close();
   });
 
-  async function createGrant(userId: string, walletId: string): Promise<DelegatedGrantRow> {
+  /**
+   * Raw ledger creation: the provider enforcement surface is deliberately absent,
+   * which is the state the ledger must refuse to execute against.
+   */
+  async function createGrant(
+    userId: string,
+    walletId: string,
+    overrides: { expiresAt?: Date } = {},
+  ): Promise<DelegatedGrantRow> {
     return service.createGrant({
       userId,
       walletId,
@@ -66,28 +87,79 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
       maxCumulative: MAX_CUMULATIVE,
       windowSeconds: WINDOW_SECONDS,
       recipients: [RECIPIENT],
-      expiresAt: new Date(Date.now() + 7 * 86_400_000),
+      expiresAt: overrides.expiresAt ?? new Date(Date.now() + 7 * 86_400_000),
     });
   }
 
-  it("creates a grant, appends a created audit row, and lists grants", async () => {
+  /** Ledger creation followed by a real policy sync (the production lifecycle). */
+  async function createPolicyReadyGrant(
+    userId: string,
+    walletId: string,
+    overrides: { expiresAt?: Date } = {},
+  ): Promise<DelegatedGrantRow> {
+    const grant = await createGrant(userId, walletId, overrides);
+    const sync = new PrivyPolicySyncService(database, fakeProvisioner());
+    const outcome = await sync.syncGrant(grant.id, userId, walletId);
+    if (!outcome.policyId) throw new Error("fixture policy sync failed");
+    const synced = await service.getGrant(grant.id, userId);
+    if (!synced) throw new Error("synced grant disappeared");
+    return synced;
+  }
+
+  async function auditEvents(userId: string, grantId: string) {
+    const result = await database.withUserTransaction(userId, (client) =>
+      client.query<{
+        event: string;
+        reason: string | null;
+        amount: string | null;
+      }>(
+        `SELECT event, reason, amount FROM grant_audit_log
+           WHERE grant_id = $1 ORDER BY created_at, event`,
+        [grantId],
+      ),
+    );
+    return result.rows;
+  }
+
+  it("creates a grant with a created audit row and NO fabricated policy_synced row", async () => {
     const userId = await provisionUser(database);
     const walletId = await provisionWallet(database, userId);
     const grant = await createGrant(userId, walletId);
 
     expect(grant.state).toBe("active");
     expect(grant.maxPerTransfer).toBe("1000000");
+    // Fail-closed: no provider enforcement surface exists yet.
+    expect(grant.providerPolicyId).toBeNull();
 
-    const audit = await database.withUserTransaction(userId, (client) =>
-      client.query<{ event: string }>(
-        `SELECT event FROM grant_audit_log WHERE grant_id = $1 ORDER BY created_at`,
-        [grant.id],
-      ),
-    );
-    expect(audit.rows.map((row) => row.event)).toEqual(["created", "policy_synced"]);
+    // The audit trail must not claim a policy sync that never happened.
+    expect(
+      (await auditEvents(userId, grant.id)).map((row) => row.event),
+    ).toEqual(["created"]);
 
     const listed = await service.listGrants(userId);
     expect(listed.some((row) => row.id === grant.id)).toBe(true);
+  });
+
+  it("records policy_synced only from a real sync outcome, with the policy id", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
+
+    expect(grant.providerPolicyId).toBe(`policy-${grant.id.slice(0, 8)}`);
+    const synced = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "policy_synced",
+    );
+    expect(synced).toHaveLength(1);
+    const detail = await database.withUserTransaction(userId, (client) =>
+      client.query<{ detail: { policyId?: string } | null }>(
+        `SELECT detail FROM grant_audit_log
+           WHERE grant_id = $1 AND event = 'policy_synced'`,
+        [grant.id],
+      ),
+    );
+    expect(detail.rows[0]?.detail?.policyId).toBe(
+      `policy-${grant.id.slice(0, 8)}`,
+    );
   });
 
   it("aggregates only usage inside the rolling window", async () => {
@@ -101,22 +173,30 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     expect(fresh).toBe("0");
 
     await database.withUserTransaction(userId, (client) =>
-      appendGrantAudit(database, {
-        grantId: grant.id,
-        userId,
-        event: "used",
-        amount: "2_000_000",
-      }, client),
+      appendGrantAudit(
+        database,
+        {
+          grantId: grant.id,
+          userId,
+          event: "used",
+          amount: "2_000_000",
+        },
+        client,
+      ),
     );
     // Backdate one usage row beyond the window via a second append + SQL update
     // is impossible (append-only). Instead append 'used' now and verify the sum.
     await database.withUserTransaction(userId, (client) =>
-      appendGrantAudit(database, {
-        grantId: grant.id,
-        userId,
-        event: "used",
-        amount: "1_500_000",
-      }, client),
+      appendGrantAudit(
+        database,
+        {
+          grantId: grant.id,
+          userId,
+          event: "used",
+          amount: "1_500_000",
+        },
+        client,
+      ),
     );
 
     const consumed = await database.withUserTransaction(userId, (client) =>
@@ -141,7 +221,9 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
 
     await expect(
       database.withUserTransaction(userId, (client) =>
-        client.query(`DELETE FROM grant_audit_log WHERE grant_id = $1`, [grant.id]),
+        client.query(`DELETE FROM grant_audit_log WHERE grant_id = $1`, [
+          grant.id,
+        ]),
       ),
     ).rejects.toThrow(/append-only|permission denied/i);
   });
@@ -174,15 +256,19 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
   it("atomically consumes budget: two concurrent claims cannot exceed the cap", async () => {
     const userId = await provisionUser(database);
     const walletId = await provisionWallet(database, userId);
-    const grant = await createGrant(userId, walletId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
     // Cap allows exactly one more transfer of MAX_PER_TRANSFER.
     await database.withUserTransaction(userId, (client) =>
-      appendGrantAudit(database, {
-        grantId: grant.id,
-        userId,
-        event: "used",
-        amount: "4_000_000",
-      }, client),
+      appendGrantAudit(
+        database,
+        {
+          grantId: grant.id,
+          userId,
+          event: "used",
+          amount: "4_000_000",
+        },
+        client,
+      ),
     );
 
     const claim = () =>
@@ -202,12 +288,20 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     );
     expect(fulfilled.length).toBe(1);
     expect(rejected.length).toBe(1);
+
+    // The losing claim is audited with its reason, never silently dropped.
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("cumulative_cap_exceeded");
+    expect(rejections[0]?.amount).toBe("1000000");
   });
 
-  it("reused idempotency key does not double-consume", async () => {
+  it("reused idempotency key returns the original result and does not double-consume", async () => {
     const userId = await provisionUser(database);
     const walletId = await provisionWallet(database, userId);
-    const grant = await createGrant(userId, walletId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
     const idempotencyKey = `idem-${randomUUID()}`;
 
     const first = await service.claimConsumption({
@@ -217,6 +311,7 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
       idempotencyKey,
     });
     expect(first.consumed).toBe(true);
+    expect(first.amount).toBe("1000000");
 
     const replay = await service.claimConsumption({
       grantId: grant.id,
@@ -224,24 +319,135 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
       amount: "1_000_000",
       idempotencyKey,
     });
-    expect(replay.consumed).toBe(false);
+    // The original execution result is returned, not a fresh rejection.
+    expect(replay.consumed).toBe(true);
+    expect(replay.replay).toBe(true);
+    expect(replay.amount).toBe("1000000");
 
     const consumed = await database.withUserTransaction(userId, (client) =>
       consumedInWindow(client, grant.id, WINDOW_SECONDS),
     );
     expect(consumed).toBe("1000000");
+
+    // Exactly one `used` row and no `rejected` row from the replay.
+    const events = (await auditEvents(userId, grant.id)).map(
+      (row) => row.event,
+    );
+    expect(events.filter((event) => event === "used")).toHaveLength(1);
+    expect(events).not.toContain("rejected");
+  });
+
+  it("refuses a grant without its provider policy binding and audits the reason", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createGrant(userId, walletId);
+
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "100_000",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.consumed).toBe(false);
+    expect(claim.reason).toBe("policy_not_ready");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("policy_not_ready");
+    // Fail-closed consumes nothing.
+    const consumed = await database.withUserTransaction(userId, (client) =>
+      consumedInWindow(client, grant.id, WINDOW_SECONDS),
+    );
+    expect(consumed).toBe("0");
+  });
+
+  it("rechecks expiration on the locked row and audits the rejection", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    // Policy-ready but already expired: only the locked expiry re-check stands
+    // between this grant and an unauthorized execution.
+    const grant = await createPolicyReadyGrant(userId, walletId, {
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "100_000",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.consumed).toBe(false);
+    expect(claim.reason).toBe("grant_expired");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("grant_expired");
+
+    // The spec pins that no grant state is mutated on an expiry rejection.
+    const row = await database.withUserTransaction(userId, (client) =>
+      client.query<{ state: string }>(
+        `SELECT state FROM delegated_grants WHERE id = $1`,
+        [grant.id],
+      ),
+    );
+    expect(row.rows[0]?.state).toBe("active");
+  });
+
+  it("audits a per-transfer cap rejection with its reason and amount", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
+
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "2_000_000",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.reason).toBe("per_transfer_cap_exceeded");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("per_transfer_cap_exceeded");
+    expect(rejections[0]?.amount).toBe("2000000");
+  });
+
+  it("audits a revoked-grant rejection", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
+
+    await service.revokeGrant(grant.id, userId);
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "100_000",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.consumed).toBe(false);
+    expect(claim.reason).toBe("grant_revoked");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("grant_revoked");
   });
 
   it("cross-user access to a grant is impossible (RLS through service path)", async () => {
     const userIdA = await provisionUser(database);
     const walletA = await provisionWallet(database, userIdA);
-    const grant = await createGrant(userIdA, walletA);
+    const grant = await createPolicyReadyGrant(userIdA, walletA);
 
     const userIdB = await provisionUser(database);
     const listed = await service.listGrants(userIdB);
     expect(listed.some((row) => row.id === grant.id)).toBe(false);
-    await expect(
-      service.revokeGrant(grant.id, userIdB),
-    ).rejects.toThrow();
+    await expect(service.revokeGrant(grant.id, userIdB)).rejects.toThrow();
   });
 });

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { evaluateGrant, type DelegatedGrantRecord } from "../../src/wallet/grants/engine.js";
+import {
+  evaluateGrant,
+  type DelegatedGrantRecord,
+} from "../../src/wallet/grants/engine.js";
 
 const NOW = Date.parse("2026-10-03T22:00:00.000Z");
 const VALID_SOLANA = "So11111111111111111111111111111111111111112";
@@ -16,7 +19,7 @@ function grantFor(chain: string, recipients: string[]): DelegatedGrantRecord {
     windowSeconds: 3600,
     recipients,
     state: "active",
-    providerPolicyId: null,
+    providerPolicyId: "fixture_policy_validators",
     createdAt: NOW - 60_000,
     expiresAt: NOW + 86_400_000,
     revokedAt: null,
@@ -27,7 +30,13 @@ describe("chain validator plug-in (DGC-2.2)", () => {
   it("accepts a valid base58 solana recipient", () => {
     const decision = evaluateGrant(
       grantFor("solana", [VALID_SOLANA]),
-      { action: "transfer", chain: "solana", amount: "100", recipient: VALID_SOLANA, now: NOW },
+      {
+        action: "transfer",
+        chain: "solana",
+        amount: "100",
+        recipient: VALID_SOLANA,
+        now: NOW,
+      },
       { consumedInWindow: "0" },
     );
     expect(decision).toEqual({ decision: "covered" });
@@ -37,19 +46,37 @@ describe("chain validator plug-in (DGC-2.2)", () => {
     for (const bad of ["0OIl", "l0OIl", "0xdeadbeef"]) {
       const decision = evaluateGrant(
         grantFor("solana", [bad]),
-        { action: "transfer", chain: "solana", amount: "100", recipient: bad, now: NOW },
+        {
+          action: "transfer",
+          chain: "solana",
+          amount: "100",
+          recipient: bad,
+          now: NOW,
+        },
         { consumedInWindow: "0" },
       );
-      expect(decision).toEqual({ decision: "degrade", reason: "recipient_invalid" });
+      expect(decision).toEqual({
+        decision: "degrade",
+        reason: "recipient_invalid",
+      });
     }
   });
 
   it("fails closed for an unregistered chain before any allowlist logic", () => {
     const decision = evaluateGrant(
       grantFor("ethereum", ["0xabc"]),
-      { action: "transfer", chain: "ethereum", amount: "100", recipient: "0xabc", now: NOW },
+      {
+        action: "transfer",
+        chain: "ethereum",
+        amount: "100",
+        recipient: "0xabc",
+        now: NOW,
+      },
       { consumedInWindow: "0" },
     );
-    expect(decision).toEqual({ decision: "degrade", reason: "validator_unavailable" });
+    expect(decision).toEqual({
+      decision: "degrade",
+      reason: "validator_unavailable",
+    });
   });
 });
