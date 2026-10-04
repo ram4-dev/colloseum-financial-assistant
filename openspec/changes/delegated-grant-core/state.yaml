@@ -10,8 +10,8 @@ phases:
   spec: completed
   design: completed
   tasks: completed
-  apply: not_started
-  verify: not_started
+  apply: completed
+  verify: completed
   archive: not_started
 notes: >
   Slice 1 of the approved plan at
