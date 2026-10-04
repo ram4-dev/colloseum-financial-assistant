@@ -102,6 +102,18 @@ suite("/v1/voice/room-token authorization (PMU-020, privy mode)", () => {
     }
   });
 
+  it("registers the authenticated grants route on the production server", async () => {
+    const app = buildServer();
+    try {
+      const response = await app.inject({ method: "GET", url: "/v1/grants" });
+      // An unregistered route would be 404; 401 proves the production builder
+      // wired the endpoint and that it passes through the shared identity gate.
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns the same 404 for a foreign conversation as for a missing one", async () => {
     const app = buildServer();
     try {

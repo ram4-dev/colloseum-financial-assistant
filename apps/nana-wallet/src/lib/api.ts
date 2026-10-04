@@ -28,6 +28,10 @@ import type {
   VoiceRoomTokenResponse,
   ActivateWalletPermissionInput,
   WalletActivationResponse,
+  CreateDelegatedGrantRequest,
+  CreateDelegatedGrantResponse,
+  ListDelegatedGrantsResponse,
+  RevokeDelegatedGrantResponse,
   WalletPermissionResponse,
   WalletRevokeResponse,
   WalletSummary,
@@ -425,6 +429,19 @@ export const api = {
   // contract; the server resolves owner, chain and token itself.
   getBalances: () => request<BalancesData>("/v1/wallets/current/balances"),
 
+  // DGC-5: delegated grants lifecycle (authenticated HTTP only; never
+  // voice). The server enforces scope, caps, window, expiry and revocation.
+  listGrants: () => request<ListDelegatedGrantsResponse>("/v1/grants"),
+
+  createGrant: (input: CreateDelegatedGrantRequest) =>
+    request<CreateDelegatedGrantResponse>("/v1/grants", jsonRequest("POST", input)),
+
+  revokeGrant: (grantId: string) =>
+    request<RevokeDelegatedGrantResponse>(
+      `/v1/grants/${encodeURIComponent(grantId)}/revoke`,
+      jsonRequest("POST", {}),
+    ),
+
   syncWallet: () => request<WalletSyncResponse>("/v1/wallets/sync", jsonRequest("POST", {})),
 
   getCurrentWalletPermission: () =>
@@ -663,6 +680,7 @@ export const queryKeys = {
   currentWallet: (userId: string | undefined) => ["wallet", "current", userId] as const,
   walletPermission: (userId: string | undefined) => ["wallet", "permission", userId] as const,
   contacts: (userId: string | undefined) => ["contacts", userId] as const,
+  grants: (userId: string | undefined) => ["grants", userId] as const,
   agenda: (userId: string | undefined, from: string, to: string) =>
     ["agenda", userId, from, to] as const,
   bills: (userId: string | undefined) => ["bills", userId] as const,

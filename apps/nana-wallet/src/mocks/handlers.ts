@@ -7,9 +7,11 @@ import type {
   BalancesData,
   Bill,
   Contact,
+  CreateDelegatedGrantRequest,
   CreateAgendaEventInput,
   CreateContactInput,
   CurrentWalletResponse,
+  DelegatedGrant,
   ErrCode,
   MeResponse,
   MovementsPage,
@@ -242,6 +244,8 @@ let walletReadiness: CurrentWalletResponse = {
   chainFamily: "arc",
   provider: "privy",
 };
+
+let delegatedGrants: DelegatedGrant[] = [];
 
 let walletPermission: WalletPermissionResponse = {
   userId: me.userId,
@@ -733,6 +737,37 @@ export const handlers = [
   }),
 
   http.get(apiPath("/me"), () => ok(me)),
+
+  http.get(apiPath("/grants"), () => ok({ grants: delegatedGrants })),
+
+  http.post(apiPath("/grants"), async ({ request }) => {
+    const input = (await request.json()) as CreateDelegatedGrantRequest;
+    const grant: DelegatedGrant = {
+      id: crypto.randomUUID(),
+      walletId: "33333333-3333-4333-8333-333333333333",
+      ...input,
+      state: "active",
+      // Slice 1 has no live Solana policy adapter; the mock mirrors the
+      // development server's fail-closed response.
+      policyReady: false,
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+    };
+    delegatedGrants = [grant, ...delegatedGrants];
+    return ok({ grant });
+  }),
+
+  http.post(apiPath("/grants/:grantId/revoke"), ({ params }) => {
+    const grant = delegatedGrants.find((row) => row.id === params["grantId"]);
+    if (!grant) return err("NO_ENCONTRADO", "Autorización no encontrada.", 404);
+    const revoked: DelegatedGrant = {
+      ...grant,
+      state: "revoked",
+      revokedAt: new Date().toISOString(),
+    };
+    delegatedGrants = delegatedGrants.map((row) => (row.id === revoked.id ? revoked : row));
+    return ok({ grant: revoked });
+  }),
 
   // PEW-005/007/013: wallet lifecycle + permission surface. Readiness is
   // separate from permission readiness; these are user-scoped and never

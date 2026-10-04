@@ -10,6 +10,28 @@ export class DatabaseClient {
     return this.pool.query<Row>(text, values as unknown[]);
   }
 
+  /**
+   * Anonymous user-scoped transaction for system-level ledger operations that
+   * are not tied to one user's request path (fixtures, migration-time sync).
+   * Sets LOCAL ROLE recipient_app without a user context: rows written here are
+   * visible only through policies that match the empty app.user_id.
+   */
+  public async withUserTransactionAnonymous<T>(operation: (client: Queryable) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL ROLE recipient_app');
+      const result = await operation(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   public async withUserTransaction<T>(userId: string, operation: (client: Queryable) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
