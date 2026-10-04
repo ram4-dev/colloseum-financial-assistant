@@ -239,7 +239,6 @@ const GRANTED_RECIPIENTS = [
 // an active, user-revocable grant.
 let walletReadiness: CurrentWalletResponse = {
   userId: me.userId,
-  walletId: "33333333-3333-4333-8333-333333333333",
   state: "ready",
   address: READY_WALLET_ADDRESS,
   chainFamily: "arc",
