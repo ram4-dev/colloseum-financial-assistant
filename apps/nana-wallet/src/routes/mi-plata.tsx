@@ -220,9 +220,7 @@ function MiPlataPage() {
       <ManageWalletSection userId={userId} />
 
       <Suspense
-        fallback={
-          <p className="mt-6 text-sm text-muted-foreground">Cargando autorizaciones…</p>
-        }
+        fallback={<p className="mt-6 text-sm text-muted-foreground">Cargando autorizaciones…</p>}
       >
         <DelegatedGrantsSection userId={userId} />
       </Suspense>

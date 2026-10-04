@@ -125,10 +125,7 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
       if (!/^\d+$/.test(maxPerTransfer) || !/^\d+$/.test(maxCumulative)) {
         throw new Error("Los límites deben ser números enteros positivos.");
       }
-      if (
-        BigInt(maxPerTransfer) <= 0n ||
-        BigInt(maxCumulative) < BigInt(maxPerTransfer)
-      ) {
+      if (BigInt(maxPerTransfer) <= 0n || BigInt(maxCumulative) < BigInt(maxPerTransfer)) {
         throw new Error(
           "El tope acumulado debe ser igual o mayor que el máximo por transferencia.",
         );

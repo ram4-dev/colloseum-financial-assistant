@@ -759,16 +759,14 @@ export const handlers = [
   }),
 
   http.post(apiPath("/grants/:grantId/revoke"), ({ params }) => {
-    const grant = delegatedGrants.find((row) => row.id === params.grantId);
+    const grant = delegatedGrants.find((row) => row.id === params["grantId"]);
     if (!grant) return err("NO_ENCONTRADO", "Autorización no encontrada.", 404);
     const revoked: DelegatedGrant = {
       ...grant,
       state: "revoked",
       revokedAt: new Date().toISOString(),
     };
-    delegatedGrants = delegatedGrants.map((row) =>
-      row.id === revoked.id ? revoked : row,
-    );
+    delegatedGrants = delegatedGrants.map((row) => (row.id === revoked.id ? revoked : row));
     return ok({ grant: revoked });
   }),
 

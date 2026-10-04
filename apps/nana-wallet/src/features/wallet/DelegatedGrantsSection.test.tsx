@@ -92,7 +92,7 @@ describe("DelegatedGrantsSection", () => {
       </Wrapper>,
     );
     await screen.findByText(/Todavía no tenés autorizaciones delegadas/i);
-    await userEvent.click(screen.getByText("Crear autorización"));
+    await userEvent.click(screen.getByText("Crear autorización", { selector: "summary" }));
     await userEvent.type(
       screen.getByRole("textbox", { name: "Direcciones autorizadas" }),
       "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
