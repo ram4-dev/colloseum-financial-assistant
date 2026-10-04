@@ -125,9 +125,11 @@ describe("evaluateGrant (DGC-2, pure grant engine)", () => {
   });
 
   it("rejects an action the grant does not cover", () => {
+    // Cast: the wire contract will be widened to 'swap' in Slice 7; today the
+    // type only admits 'transfer', so the unsupported action is simulated.
     const decision = evaluateGrant(
       grant(),
-      request({ action: "swap" }),
+      request({ action: "swap" as unknown as "transfer" }),
       { consumedInWindow: "0" },
     );
     expect(decision).toEqual({
