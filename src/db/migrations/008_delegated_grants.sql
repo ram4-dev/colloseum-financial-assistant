@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS grant_claim_ledger (
   grant_id UUID NOT NULL,
   user_id UUID NOT NULL,
   idempotency_key TEXT NOT NULL,
-  amount NUMERIC(38,0) NOT NULL,
+  amount NUMERIC(38,0) NOT NULL CONSTRAINT grant_claim_ledger_amount_positive_ck CHECK (amount > 0),
   claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT grant_claim_ledger_grant_idempotency_uk UNIQUE (grant_id, idempotency_key)
 );

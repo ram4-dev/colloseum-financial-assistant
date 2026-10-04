@@ -161,6 +161,15 @@ handles voice-side classification).
   testable without DB.
 - No cached grant state: revocation/expiration checked per execution.
 - Every reject/allow appends audit BEFORE any on-chain side effect.
+- `claimConsumption` accepts only positive decimal integers in smallest units.
+  Invalid or zero amounts return an `invalid_amount` rejection, append an audit
+  row with a null amount, and never reach `BigInt`; the claim ledger enforces
+  `amount > 0` as a database invariant.
+- Legacy-row preservation policy (R4 remediation): fresh installs carry the
+  fully validated named constraint `grant_claim_ledger_amount_positive_ck`;
+  upgraded databases add the same named constraint `NOT VALID`, which preserves
+  any historical append-only rows while still rejecting future INSERT/UPDATE
+  violations. `parsePositiveAmount` is module-private (no external caller).
 - Demo boundary: fixture `WDK_TOOLS_SOURCE=fixture` unchanged; Privy policy sync
   is exercised on devnet only; unit/integration tests use a fake policy client.
 - Slice 1 has no denomination-safe Solana policy adapter. The production

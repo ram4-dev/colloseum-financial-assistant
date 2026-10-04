@@ -128,6 +128,27 @@ source of truth.
 - **Then** no additional consumption or on-chain effect occurs (DB-level
   idempotency), and the original execution result is returned
 
+#### Scenario: Invalid claim amount is rejected without throwing
+
+- **Given** a claim amount that is zero or not a positive decimal integer in
+  smallest units
+- **When** the claim is evaluated
+- **Then** the service returns `invalid_amount`, appends a rejected audit row
+  without storing the malformed amount, creates no claim-ledger row, and never
+  throws from integer parsing
+
+#### Scenario: Claim ledger enforces positive amounts across upgrade paths
+
+- **Given** a fresh install (fully validated named constraint
+  `grant_claim_ledger_amount_positive_ck` on `grant_claim_ledger`) or an upgraded
+  database (the same named constraint added `NOT VALID` by the upgrade
+  migration)
+- **When** any write attempts to persist a claim amount that is not a positive
+  decimal integer
+- **Then** the database rejects the write, and previously persisted historical
+  rows in the upgraded database remain intact (the constraint validates future
+  INSERT/UPDATE statements only until a validation sweep is chosen)
+
 ### Requirement: Privy Solana policy sync driven by the grants ledger
 
 The grants ledger SHALL be the single decision authority for creating, rotating,

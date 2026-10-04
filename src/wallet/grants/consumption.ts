@@ -116,6 +116,37 @@ function normalizeDecimal(value: string): string {
 }
 
 /**
+ * DGC-8.7 (R4): parse a claim amount as a positive decimal integer in smallest
+ * units BEFORE any BigInt arithmetic runs on it. The raw value must be either
+ * plain digits or correctly underscore-grouped thousands (1_000_000); leading,
+ * trailing, or doubled underscores (e.g. `_1`, `1__0`, `1_`) are rejected
+ * before any separator stripping. Anything that is not a positive decimal
+ * integer — empty, fractional, negative, non-numeric, malformed grouping, or
+ * zero — is rejected. Returns the canonical decimal string, or null when the
+ * amount is malformed or non-positive; the caller must fail closed with
+ * `invalid_amount` and must never feed the raw value to BigInt.
+ */
+function parsePositiveAmount(raw: unknown): string | null {
+  // Runtime guard: malformed JavaScript callers (non-string amounts) must fail
+  // closed here instead of throwing before the `invalid_amount` rejection path.
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const plainDigits = /^\d+$/;
+  const groupedThousands = /^\d{1,3}(_\d{3})+$/;
+  if (!plainDigits.test(raw) && !groupedThousands.test(raw)) {
+    return null;
+  }
+  const normalized = raw.replaceAll("_", "");
+  // Safe: the validators above guarantee digits only, so BigInt cannot throw.
+  const value = BigInt(normalized);
+  if (value <= 0n) {
+    return null;
+  }
+  return value.toString();
+}
+
+/**
  * Sum of audited `used` amounts for a grant inside its rolling window
  * (created_at > now - window). Uses the passed clock so tests can pin time.
  */
@@ -377,10 +408,19 @@ export class DelegatedGrantService {
         return { consumed: false, reason: "grant_not_found" };
       }
       const grant = mapGrant(grantRow);
-      const amount = normalizeDecimal(input.amount);
+      // DGC-8.7 (R4): validate the amount before ANY integer math. A malformed
+      // or non-positive amount is rejected as `invalid_amount`, audited with a
+      // NULL amount (the malformed value is never persisted), creates no
+      // claim-ledger row, and never throws from BigInt parsing.
+      const amount = parsePositiveAmount(input.amount);
+      if (amount === null) {
+        await this.appendRejection(client, input, "invalid_amount", null);
+        return { consumed: false, reason: "invalid_amount" };
+      }
 
       if (grant.state !== "active") {
-        const reason = grant.state === "expired" ? "grant_expired" : "grant_revoked";
+        const reason =
+          grant.state === "expired" ? "grant_expired" : "grant_revoked";
         await this.appendRejection(client, input, reason, amount);
         return { consumed: false, reason };
       }
@@ -456,7 +496,7 @@ export class DelegatedGrantService {
     client: Queryable,
     input: { grantId: string; userId: string; idempotencyKey: string },
     reason: string,
-    amount: string,
+    amount: string | null,
   ): Promise<void> {
     await client.query(
       `INSERT INTO grant_audit_log (grant_id, user_id, event, reason, amount, detail)

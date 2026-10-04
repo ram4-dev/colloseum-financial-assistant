@@ -85,3 +85,7 @@
 - [x] 8.6 Add regression coverage for the review findings. Hermes owns execution
       of all PR test, lint, typecheck, build, and E2E suites; results remain
       pending in the PR review gate.
+- [x] 8.7 Reject malformed and non-positive claim amounts before integer math;
+      audit the rejection without persisting the invalid amount, add a positive
+      claim-ledger database constraint to both migration mirrors, and cover the
+      behavior with runtime regression tests.

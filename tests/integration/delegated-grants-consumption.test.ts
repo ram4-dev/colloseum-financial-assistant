@@ -440,6 +440,65 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     expect(rejections[0]?.reason).toBe("grant_revoked");
   });
 
+  it("rejects a zero amount as invalid_amount, audits NULL, and creates no claim row", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
+
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "0",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.consumed).toBe(false);
+    expect(claim.reason).toBe("invalid_amount");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("invalid_amount");
+    // The malformed value is never persisted: the audit amount is NULL.
+    expect(rejections[0]?.amount).toBeNull();
+    const claimRows = await database.withUserTransaction(userId, (client) =>
+      client.query<{ id: string }>(
+        `SELECT id FROM grant_claim_ledger WHERE grant_id = $1`,
+        [grant.id],
+      ),
+    );
+    expect(claimRows.rowCount).toBe(0);
+  });
+
+  it("rejects a malformed amount as invalid_amount, audits NULL, and creates no claim row", async () => {
+    const userId = await provisionUser(database);
+    const walletId = await provisionWallet(database, userId);
+    const grant = await createPolicyReadyGrant(userId, walletId);
+
+    const claim = await service.claimConsumption({
+      grantId: grant.id,
+      userId,
+      amount: "1__0",
+      idempotencyKey: `claim-${randomUUID()}`,
+    });
+
+    expect(claim.consumed).toBe(false);
+    expect(claim.reason).toBe("invalid_amount");
+    const rejections = (await auditEvents(userId, grant.id)).filter(
+      (row) => row.event === "rejected",
+    );
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]?.reason).toBe("invalid_amount");
+    expect(rejections[0]?.amount).toBeNull();
+    const claimRows = await database.withUserTransaction(userId, (client) =>
+      client.query<{ id: string }>(
+        `SELECT id FROM grant_claim_ledger WHERE grant_id = $1`,
+        [grant.id],
+      ),
+    );
+    expect(claimRows.rowCount).toBe(0);
+  });
+
   it("cross-user access to a grant is impossible (RLS through service path)", async () => {
     const userIdA = await provisionUser(database);
     const walletA = await provisionWallet(database, userIdA);
