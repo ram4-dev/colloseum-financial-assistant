@@ -34,6 +34,32 @@ CREATE INDEX IF NOT EXISTS delegated_grants_user_state_idx
 CREATE INDEX IF NOT EXISTS delegated_grants_wallet_idx
   ON public.delegated_grants (wallet_id);
 
+-- Consumption claims: DB-level idempotency (DGC-3). One claim per
+-- (grant, idempotency key); a replay must never double-consume.
+CREATE TABLE IF NOT EXISTS public.grant_claim_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  grant_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  amount NUMERIC(38,0) NOT NULL,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT grant_claim_ledger_grant_idempotency_uk UNIQUE (grant_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS grant_claim_ledger_grant_idx
+  ON public.grant_claim_ledger (grant_id);
+
+ALTER TABLE public.grant_claim_ledger ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.grant_claim_ledger FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS grant_claim_ledger_user_isolation ON public.grant_claim_ledger;
+CREATE POLICY grant_claim_ledger_user_isolation ON public.grant_claim_ledger
+  USING (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)
+  WITH CHECK (user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
+
+REVOKE ALL ON public.grant_claim_ledger FROM PUBLIC;
+GRANT SELECT, INSERT ON public.grant_claim_ledger TO recipient_app;
+
 CREATE TABLE IF NOT EXISTS public.grant_audit_log (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   grant_id UUID NOT NULL,
@@ -99,6 +125,14 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'grant_audit_log_user_id_users_fk') THEN
     ALTER TABLE grant_audit_log ADD CONSTRAINT grant_audit_log_user_id_users_fk
       FOREIGN KEY (user_id) REFERENCES public.users(id) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'grant_claim_ledger_user_id_users_fk') THEN
+    ALTER TABLE public.grant_claim_ledger ADD CONSTRAINT grant_claim_ledger_user_id_users_fk
+      FOREIGN KEY (user_id) REFERENCES public.users(id) NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'grant_claim_ledger_grant_id_grants_fk') THEN
+    ALTER TABLE public.grant_claim_ledger ADD CONSTRAINT grant_claim_ledger_grant_id_grants_fk
+      FOREIGN KEY (grant_id) REFERENCES public.delegated_grants(id) NOT VALID;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'grant_audit_log_grant_id_grants_fk') THEN
     ALTER TABLE grant_audit_log ADD CONSTRAINT grant_audit_log_grant_id_grants_fk
