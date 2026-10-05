@@ -12,22 +12,24 @@ function txDetail(args: {
   accountKeys?: string[];
   preSol?: number[];
   postSol?: number[];
-  preToken?: Array<{ owner: string; amount: string }>;
-  postToken?: Array<{ owner: string; amount: string }>;
+  preToken?: Array<{ owner: string; mint?: string; amount: string }>;
+  postToken?: Array<{ owner: string; mint?: string; amount: string }>;
 }): Record<string, unknown> {
   return {
     meta: {
       err: args.err ?? null,
       preBalances: args.preSol ?? [],
       postBalances: args.postSol ?? [],
-      preTokenBalances:
-        args.preToken?.map((entry) => ({
-          owner: entry.owner,
-          uiTokenAmount: { amount: entry.amount },
-        })) ?? null,
+        preTokenBalances:
+          args.preToken?.map((entry) => ({
+            owner: entry.owner,
+            mint: entry.mint,
+            uiTokenAmount: { amount: entry.amount },
+          })) ?? null,
       postTokenBalances:
         args.postToken?.map((entry) => ({
           owner: entry.owner,
+          mint: entry.mint,
           uiTokenAmount: { amount: entry.amount },
         })) ?? null,
     },
@@ -92,6 +94,37 @@ describe("solana devnet reconciliation source classification", () => {
     expect(page.observations[0]!.eventClass).toBe("confirmed_transfer");
   });
 
+  it("keeps SPL token deltas separate by mint", async () => {
+    const source = createSolanaDevnetReconciliationSource({
+      rpc: rpcWith([{ signature: "sig-swap", err: null }], {
+        "sig-swap": txDetail({
+          preSol: [50],
+          postSol: [50],
+          preToken: [
+            { owner: WALLET, mint: "mint-out", amount: "100" },
+            { owner: WALLET, mint: "mint-in", amount: "0" },
+          ],
+          postToken: [
+            { owner: WALLET, mint: "mint-out", amount: "0" },
+            { owner: WALLET, mint: "mint-in", amount: "50" },
+          ],
+        }),
+      }),
+    });
+    const page = await source.fetchConfirmedPage({
+      walletAddress: WALLET,
+      network: "solana-devnet",
+      caughtUpThrough: null,
+      scanCursor: null,
+      pageSize: 10,
+    });
+    // A positive delta in mint-in remains observable even though another
+    // mint leaves the wallet in the same transaction.
+    expect(page.observations).toEqual([
+      { signature: "sig-swap", eventClass: "confirmed_transfer" },
+    ]);
+  });
+
   it("ignores outgoing, failed, and unsupported transactions", async () => {
     const source = createSolanaDevnetReconciliationSource({
       rpc: rpcWith(
@@ -141,7 +174,7 @@ describe("solana devnet reconciliation source classification", () => {
     ).rejects.toThrow(/details unavailable/);
   });
 
-  it("returns newest-first RPC entries as oldest-first observations with the oldest cursor", async () => {
+  it("returns newest-first RPC entries as oldest-first observations with page boundaries", async () => {
     const source = createSolanaDevnetReconciliationSource({
       rpc: rpcWith(
         [
@@ -173,5 +206,34 @@ describe("solana devnet reconciliation source classification", () => {
     expect(page.pageNewest).toBe("sig-new");
     expect(page.pageOldest).toBe("sig-old");
     expect(page.reachedWatermark).toBe(true);
+  });
+
+  it("passes scan bounds and the hard page limit to the RPC adapter", async () => {
+    let request:
+      | { before?: string; until?: string; limit?: number }
+      | undefined;
+    const source = createSolanaDevnetReconciliationSource({
+      rpc: {
+        async getSignaturesForAddress(_address, options) {
+          request = options;
+          return [];
+        },
+        async getTransaction() {
+          return null;
+        },
+      },
+    });
+    await source.fetchConfirmedPage({
+      walletAddress: WALLET,
+      network: "solana-devnet",
+      caughtUpThrough: "sig-watermark",
+      scanCursor: "sig-scan",
+      pageSize: 42,
+    });
+    expect(request).toEqual({
+      before: "sig-scan",
+      until: "sig-watermark",
+      limit: 42,
+    });
   });
 });
