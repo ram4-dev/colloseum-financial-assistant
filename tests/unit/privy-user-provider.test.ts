@@ -8,6 +8,7 @@ import {
   PrivyWalletRuntimeError,
   bindWalletForUser,
   createPrivyWalletForUserResolver,
+  walletChainFamilyForNetwork,
 } from "../../src/wallet/privy-user-provider.js";
 
 const USER_A = "11111111-1111-4111-8111-111111111111";
@@ -67,6 +68,18 @@ function privyFixture(
 }
 
 describe("Privy per-user wallet runtime", () => {
+  it("maps provider networks to their ledger family and rejects unknown networks", () => {
+    expect(walletChainFamilyForNetwork("solana-devnet")).toBe("solana");
+    expect(walletChainFamilyForNetwork("arc-testnet")).toBe("ethereum");
+    expect(walletChainFamilyForNetwork("sepolia")).toBe("ethereum");
+    expect(() => walletChainFamilyForNetwork("unknown-net")).toThrowError(
+      expect.objectContaining({ code: "wallet_config_error" }),
+    );
+    expect(() => walletChainFamilyForNetwork(undefined)).toThrowError(
+      expect.objectContaining({ code: "wallet_config_error" }),
+    );
+  });
+
   it("selects the wallet from Privy's trusted user filter for each user", async () => {
     const database = databaseFixture({
       [USER_A]: {
@@ -243,6 +256,25 @@ describe("Privy per-user wallet runtime", () => {
       }),
     ).rejects.toMatchObject({ code: "wallet_not_ready" });
     expect(resolve).toHaveBeenCalledWith(USER_A);
+  });
+
+  it("preserves the selected ledger chain through deferred wallet binding", async () => {
+    const resolve = vi.fn(async () => {
+      throw new PrivyWalletRuntimeError(
+        "wallet_not_ready",
+        "No Solana wallet for this user.",
+      );
+    });
+    const scoped = bindWalletForUser(resolve, USER_A, "solana");
+
+    await expect(
+      scoped.getBalance({
+        network: "solana-devnet",
+        token: "SOL",
+        wallet: USER_A,
+      }),
+    ).rejects.toMatchObject({ code: "wallet_not_ready" });
+    expect(resolve).toHaveBeenCalledWith(USER_A, "solana");
   });
 
   it("never previews or dispatches while provider policy limits are unproven", async () => {

@@ -10,24 +10,26 @@ import {
   type GrantPolicyProvisioner,
 } from "../../src/wallet/grants/privy-policy-sync.js";
 
-const databaseUrl = process.env.DATABASE_URL;
-const suite = databaseUrl ? describe : describe.skip;
-
 const RECIPIENT = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
 type ProvisionCall = {
   grantId: string;
   walletId: string;
+  userId: string;
+  chain: string;
   recipients: string[];
   maxPerTransfer: string;
   maxCumulative: string;
-  windowSeconds: number;
+  /** Stored ledger expiry (epoch seconds); never synthesized from a window. */
+  expiresAt: number;
 };
 
-function fakeProvisioner(overrides: {
-  onProvision?: (call: ProvisionCall) => Promise<{ policyId: string }>;
-  onRevoke?: (policyId: string) => Promise<void>;
-} = {}): GrantPolicyProvisioner & { calls: ProvisionCall[]; revoked: string[] } {
+function fakeProvisioner(
+  overrides: {
+    onProvision?: (call: ProvisionCall) => Promise<{ policyId: string }>;
+    onRevoke?: (input: Parameters<GrantPolicyProvisioner["revokePolicy"]>[0]) => Promise<void>;
+  } = {},
+): GrantPolicyProvisioner & { calls: ProvisionCall[]; revoked: string[] } {
   const calls: ProvisionCall[] = [];
   const revoked: string[] = [];
   return {
@@ -38,14 +40,16 @@ function fakeProvisioner(overrides: {
       if (overrides.onProvision) return overrides.onProvision(input);
       return { policyId: `policy-${input.grantId.slice(0, 8)}` };
     },
-    async revokePolicy(policyId: string) {
-      revoked.push(policyId);
-      if (overrides.onRevoke) return overrides.onRevoke(policyId);
+    async revokePolicy(input) {
+      revoked.push(input.policyId);
+      if (overrides.onRevoke) return overrides.onRevoke(input);
     },
   };
 }
+const databaseUrl = process.env.DATABASE_URL;
+const suite = databaseUrl ? describe : describe.skip;
 
-describe("privy policy sync (DGC-4, hybrid enforcement)", () => {
+suite("privy policy sync (DGC-4, hybrid enforcement)", () => {
   let database: DatabaseClient;
   let service: DelegatedGrantService;
 
@@ -58,7 +62,11 @@ describe("privy policy sync (DGC-4, hybrid enforcement)", () => {
     await database.close();
   });
 
-  async function setup(): Promise<{ userId: string; walletId: string; grantId: string }> {
+  async function setup(): Promise<{
+    userId: string;
+    walletId: string;
+    grantId: string;
+  }> {
     const user = await database.query<{ id: string }>(
       `INSERT INTO users (privy_did, display_name)
        VALUES ($1, $2) RETURNING id`,
@@ -100,7 +108,8 @@ describe("privy policy sync (DGC-4, hybrid enforcement)", () => {
       recipients: [RECIPIENT],
       maxPerTransfer: "1000000",
       maxCumulative: "5000000",
-      windowSeconds: 3_600,
+      // Exact stored expiry (epoch seconds), never a window rollforward.
+      expiresAt: Math.floor(new Date(Date.now() + 86_400_000).getTime() / 1000),
     });
 
     const row = await database.withUserTransaction(userId, (client) =>
@@ -109,7 +118,9 @@ describe("privy policy sync (DGC-4, hybrid enforcement)", () => {
         [grantId],
       ),
     );
-    expect(row.rows[0]?.provider_policy_id).toBe(`policy-${grantId.slice(0, 8)}`);
+    expect(row.rows[0]?.provider_policy_id).toBe(
+      `policy-${grantId.slice(0, 8)}`,
+    );
     expect(row.rows[0]?.state).toBe("active");
 
     const audit = await database.withUserTransaction(userId, (client) =>
@@ -122,7 +133,9 @@ describe("privy policy sync (DGC-4, hybrid enforcement)", () => {
     expect(events).toContain("policy_synced");
     // Two policy_synced rows may exist: the creation-time placeholder (no
     // detail) and the sync outcome carrying the policy id.
-    const synced = audit.rows.find((r) => r.event === "policy_synced" && r.detail?.policyId);
+    const synced = audit.rows.find(
+      (r) => r.event === "policy_synced" && r.detail?.policyId,
+    );
     expect(synced?.detail?.policyId).toBe(`policy-${grantId.slice(0, 8)}`);
   });
 

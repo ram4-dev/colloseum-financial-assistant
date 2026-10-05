@@ -106,6 +106,30 @@ describe("delegated grants HTTP lifecycle (DGC-5)", () => {
     }
   });
 
+  it("accepts the 0.01 SOL ceiling and rejects one lamport above it", async () => {
+    const app = createApp();
+    try {
+      const boundary = await app.inject({
+        method: "POST",
+        url: "/v1/grants",
+        headers: { authorization: "Bearer user-a" },
+        payload: { ...validCreateBody(), maxPerTransfer: "10000000", maxCumulative: "10000000" },
+      });
+      expect(boundary.statusCode).toBe(200);
+
+      const over = await app.inject({
+        method: "POST",
+        url: "/v1/grants",
+        headers: { authorization: "Bearer user-a" },
+        payload: { ...validCreateBody(), maxPerTransfer: "10000001", maxCumulative: "20000000" },
+      });
+      expect(over.statusCode).toBe(400);
+      expect(over.json().error.field).toBe("maxPerTransfer");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects a request body with unknown fields (strict schema)", async () => {
     const app = createApp();
     try {

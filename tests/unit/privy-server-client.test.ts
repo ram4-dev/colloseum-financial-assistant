@@ -82,6 +82,61 @@ describe("PrivyServerClient (contract-exact HTTP boundary)", () => {
     expect(headers.Authorization).toBe(BASIC);
   });
 
+  it("lists active wallets for one authenticated chain", async () => {
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse({
+        data: [
+          walletRecord("sol-wallet", {
+            address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+            chain_type: "solana",
+          }),
+          walletRecord("archived-sol-wallet", {
+            address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+            chain_type: "solana",
+            archived_at: 123,
+          }),
+        ],
+      }),
+    );
+    const client = new PrivyServerClient({
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.listWalletsForChain("did:privy:user-1", "solana"),
+    ).resolves.toMatchObject([{ id: "sol-wallet", chain_type: "solana" }]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `${BASE}/wallets?user_id=did%3Aprivy%3Auser-1&chain_type=solana&limit=100`,
+    );
+  });
+
+  it("fails closed when a chain wallet list exceeds the pagination limit", async () => {
+    let page = 0;
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse({
+        data: [
+          walletRecord("sol-wallet", {
+            address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+            chain_type: "solana",
+          }),
+        ],
+        next_cursor: `page-${++page}`,
+      }),
+    );
+    const client = new PrivyServerClient({
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.listWalletsForChain("did:privy:user-1", "solana"),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(fetchMock).toHaveBeenCalledTimes(100);
+  });
+
   it("verifies ownership by exact membership in the user-filtered list", async () => {
     const fetchMock = vi.fn<PrivyFetch>(async () =>
       mockResponse({ data: [walletRecord("wallet-9")] }),
@@ -282,5 +337,172 @@ describe("PrivyServerClient (contract-exact HTTP boundary)", () => {
       "body aborted",
     );
     expect(fetchMock.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+  });
+});
+
+// Task 2.3 (solana-devnet-provider) — contract-exact RED tests for the Privy
+// policy APIs. These describe the TARGET contract; they must fail against the
+// current implementation (Ethereum-only createPolicy, no patchPolicy).
+describe("PrivyServerClient task 2.3 policy contract (RED)", () => {
+  const solanaRules = [
+    {
+      method: "signAndSendTransaction" as const,
+      field_source: "solana_system_program_instruction" as const,
+      field: "Transfer.to",
+      operator: "in" as const,
+      value: ["9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"],
+    },
+  ];
+
+  function clientWith(fetchMock: PrivyFetch): PrivyServerClient {
+    return new PrivyServerClient({
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      fetch: fetchMock,
+    });
+  }
+
+  it("createPolicy serializes chain_type solana when requested", async () => {
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse({ id: "pol_sol" }),
+    );
+    const client = clientWith(fetchMock);
+
+    const { id } = await client.createPolicy("sol-policy", solanaRules, {
+      chainType: "solana",
+    });
+    expect(id).toBe("pol_sol");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(`${BASE}/policies`);
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      version: "1.0",
+      name: "sol-policy",
+      chain_type: "solana",
+    });
+    expect(body.rules).toEqual(solanaRules);
+  });
+
+  it("createPolicy keeps the ethereum default when no chainType is given", async () => {
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse({ id: "pol_eth" }),
+    );
+    const client = clientWith(fetchMock);
+
+    await client.createPolicy("eth-policy", solanaRules);
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.chain_type).toBe("ethereum");
+  });
+
+  it("patchPolicy sends PATCH /policies/:id with the exact rules", async () => {
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse({ id: "pol_abc", rules: solanaRules }),
+    );
+    const client = clientWith(fetchMock);
+
+    await expect(
+      client.patchPolicy("pol_abc", solanaRules),
+    ).resolves.toMatchObject({ id: "pol_abc" });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(`${BASE}/policies/pol_abc`);
+    expect(init.method).toBe("PATCH");
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.rules).toEqual(solanaRules);
+  });
+});
+
+describe("PrivyServerClient canonical signer policy attachment (task 2.7)", () => {
+  it("signed PATCH attaches to the exact signer, preserves siblings, and verifies readback", async () => {
+    const before = walletRecord("wallet-9", {
+      chain_type: "solana",
+      additional_signers: [
+        { signer_id: "signer-1", override_policy_ids: [], label: "target" },
+        { signer_id: "sibling-1", override_policy_ids: ["sibling-policy"] },
+      ],
+    });
+    const after = walletRecord("wallet-9", {
+      chain_type: "solana",
+      additional_signers: [
+        {
+          signer_id: "signer-1",
+          override_policy_ids: ["pol_solana"],
+          label: "target",
+        },
+        { signer_id: "sibling-1", override_policy_ids: ["sibling-policy"] },
+      ],
+    });
+    const fetchMock = vi
+      .fn<PrivyFetch>()
+      .mockResolvedValueOnce(mockResponse(before))
+      .mockResolvedValueOnce(mockResponse({ id: "wallet-9" }))
+      .mockResolvedValueOnce(mockResponse(after));
+    const authorizationSigner = vi.fn(
+      ({ input, authorizationPrivateKey }: {
+        input: {
+          method: string;
+          url: string;
+          body: unknown;
+          headers: Record<string, string>;
+        };
+        authorizationPrivateKey: string;
+      }) => {
+        expect(authorizationPrivateKey).toBe("test-p256-private-key");
+        expect(input.method).toBe("PATCH");
+        expect(input.url).toBe(`${BASE}/wallets/wallet-9`);
+        return "signed-request";
+      },
+    );
+    const client = new PrivyServerClient({
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      authorizationPrivateKey: "test-p256-private-key",
+      authorizationSigner,
+      fetch: fetchMock,
+    });
+
+    await client.addPolicyToSigner("wallet-9", "signer-1", "pol_solana");
+
+    expect(authorizationSigner).toHaveBeenCalledTimes(1);
+    const [, patch] = fetchMock.mock.calls[1] ?? [];
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      `${BASE}/wallets/wallet-9`,
+    );
+    expect(patch.method).toBe("PATCH");
+    const headers = patch.headers as Record<string, string>;
+    expect(headers["privy-authorization-signature"]).toBe("signed-request");
+    const body = JSON.parse(String(patch.body)) as {
+      additional_signers: unknown[];
+    };
+    expect(body.additional_signers).toEqual(after.additional_signers);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses to overwrite another policy already attached to the canonical signer", async () => {
+    const fetchMock = vi.fn<PrivyFetch>(async () =>
+      mockResponse(
+        walletRecord("wallet-9", {
+          additional_signers: [
+            { signer_id: "signer-1", override_policy_ids: ["other-policy"] },
+          ],
+        }),
+      ),
+    );
+    const client = new PrivyServerClient({
+      appId: APP_ID,
+      appSecret: APP_SECRET,
+      authorizationPrivateKey: "test-p256-private-key",
+      authorizationSigner: () => "signed-request",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.addPolicyToSigner("wallet-9", "signer-1", "pol_solana"),
+    ).rejects.toThrow(/existing policy/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
