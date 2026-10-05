@@ -15,7 +15,7 @@ tasks: complete
 independent_outline_review: pass
 apply: complete
 verify: in_progress
-delivery: pending
+delivery: in_progress
 out_of_scope:
   - multi_wallet
   - swaps
