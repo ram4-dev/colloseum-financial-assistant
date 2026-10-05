@@ -63,11 +63,11 @@ AD-6 reservations, AD-10) and "Persisted preview identity guards provider
 dispatch" (2 scenarios; AD-11). Strict TDD: RED first, DB suites on real
 Postgres (:55501). No implementation before RED evidence is recorded.
 
-- [ ] 8.1 RED migration test (`tests/integration/grant-claim-release.test.ts`):
+- [x] 8.1 RED migration test (`tests/integration/grant-claim-release.test.ts`):
   columns `released_at`/`released_reason` exist on `grant_claim_ledger`; `released`
   accepted by the `grant_audit_log` event CHECK; forced RLS + `UPDATE` grant hold
   for `recipient_app` (foreign release rejected).
-- [ ] 8.2 RED ledger tests (`releaseReservationInTransaction`, tx-only):
+- [x] 8.2 RED ledger tests (`releaseReservationInTransaction`, tx-only):
   release marks the exact row (grant + idempotency key) with reason, appends one
   `released` audit row on the SAME transaction client under the per-grant advisory
   lock; the method NEVER opens/commits/nests its own transaction (asserted);
@@ -76,7 +76,7 @@ Postgres (:55501). No implementation before RED evidence is recorded.
   path itself; a RELEASED key replay fails closed — never `consumed: true`, never
   authorizing a broadcast; re-activation under the same key is impossible by
   construction (no re-activation path exists).
-- [ ] 8.2b RED atomic all-or-nothing settlement test (REAL DB, not mock-only):
+- [x] 8.2b RED atomic all-or-nothing settlement test (REAL DB, not mock-only):
   the settlement opens ONE `withUserTransaction` and performs attempt CAS +
   ledger release + `released` audit on the SAME client — on success all three
   effects commit TOGETHER under the grant lock; on ANY injected failure at
@@ -87,13 +87,13 @@ Postgres (:55501). No implementation before RED evidence is recorded.
   unchanged — no partial cancel commit, no orphan release/audit); a losing
   concurrent `claimPendingTransfer` leaves the reservation retained; a FRESH
   previewId claims a new reservation normally.
-- [ ] 8.3 RED window tests covering BOTH code paths (explicit query rewrite, not
+- [x] 8.3 RED window tests covering BOTH code paths (explicit query rewrite, not
   additive): the claim's authoritative cap total AND the engine prefilter
   `consumedInWindow` sum UNRELEASED `grant_claim_ledger` rows (`released_at IS
   NULL`, claimed inside the window) — each test proves released rows stop counting
   and released budget is re-claimable in-window; retained reservations keep
   counting in both sums.
-- [ ] 8.4 RED service tests (settle wiring): definitive `not_dispatched` ⇒
+- [x] 8.4 RED service tests (settle wiring): definitive `not_dispatched` ⇒
   release with reason `not_dispatched`; the ONLY release authority is the
   successful EXACT-OWNER
   compare-and-set `broadcasting → cancelled` (id + status + `claim_id` all
@@ -111,7 +111,7 @@ Postgres (:55501). No implementation before RED evidence is recorded.
       reason; a same-old-key retry after release NEVER broadcasts (released key fails
       closed, attempt terminal `cancelled`); a fresh-preview retry claims a fresh
       reservation and proceeds only through the full covered path.
-  - [ ] 8.4b RED atomic settlement + ownership-token tests (final review
+- [x] 8.4b RED atomic settlement + ownership-token tests (final review
       blockers): `claimPendingTransfer` winner result RETURNS the persisted
       `claim_id`; settle threads it through the service; ONE atomic user-scoped
       transaction does exact-owner `broadcasting → cancelled` CAS (id + status +

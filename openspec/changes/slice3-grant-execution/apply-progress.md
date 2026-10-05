@@ -253,6 +253,61 @@ and two `api-contacts` timeouts. The four-file baseline subset on `origin/main`
 also reports 6 failed / 10 passed. The delegated-grant database tests remain
 green in isolation (5 files / 35 passed).
 
+### Phase 8 RED execution (2026-10-05, tests only — NO production code/migrations)
+
+New file: `tests/integration/grant-claim-release.test.ts` (11 RED tests, real
+Postgres :55501, DATABASE_URL env only; real `DelegatedGrantService`, real
+`PostgresConversationRepository`, real `grant_claim_ledger`/`grant_audit_log`/
+`conversation_transfer_attempts` rows — atomicity is NOT mock-tested).
+
+### RED evidence (vitest --reporter=verbose, /tmp/phase8-red-v7.log preserved
+as `.agent-workflow/tasks/slice3-grant-execution/phase8-red-vitest.log`)
+
+Result: **1 file, 11 tests, 11 failed — ALL feature-level** (assertions by
+absence of schema/API/branch). Zero fixture/env/DB/import failures after three
+harness iterations (per-test user+wallet+grant to respect the one-active-wallet
+per user/chain unique index; per-test conversation for the one-active-transfer
+index; documented early-return RED guards on missing APIs so no TypeError
+masks the assertion).
+
+Grouped failure causes (each RED by missing behavior):
+1. **Schema missing (migration 012):** 8.1 — `expected ['id','grant_id',…] to
+   include 'released_at'` (columns absent; `released` audit CHECK absent;
+   RLS/UPDATE-grant assertions pending the migration).
+2. **Tx-only ledger API missing:** 8.2 (x2) and 8.3 —
+   `expected 'undefined' to be 'function'` on
+   `releaseReservationInTransaction` (guarded, documented early return).
+3. **claim_id seam missing:** 8.4b real-repository test — `expected undefined
+   to be 'f3c0bb42…'`: the REAL `PostgresConversationRepository.claimPendingTransfer`
+   CAS persists and mints `claim_id` in the DB (re-read proves
+   `broadcasting` + non-null token) but `PendingTransferClaim` does not return
+   it to the winner.
+4. **Settlement API missing:** 8.2b and 8.4b (x3) — guarded absence of
+   `settleGrantReservation` (atomic CAS+release+audit; cannot be mock-tested).
+5. **Service settle branch missing:** 8.4 (x2) — the flow REACHES
+   `attempt:broadcasting` (owned state proven via events; provider
+   `not_dispatched` spy-proven awaited `kind`), then the CURRENT code runs the
+   legacy `releasePendingTransferClaim` broadcasting→previewed reset and never
+   releases the grant claim: `expected false to be true` on the `settle:`
+   event assertion.
+
+### Checks (this phase, test code only)
+
+| Check | Result |
+| --- | --- |
+| `tsc --noEmit -p tsconfig.test.json` | 0 errors |
+| `eslint tests/integration/grant-claim-release.test.ts --max-warnings=0` | clean |
+| `git diff --check` | exit 0 |
+| Focused RED suite | 1 file / 11 tests / 11 failed (all feature-level) |
+| Production diff | none (no src/, no migrations touched) |
+
+Semantics NOT claimed verified until GREEN. Harness notes: wallet/conversation
+fixtures isolated per test (unique indexes honored, none disabled);
+`insertAttempt` provisions a real conversation row (FK); deterministic runtime
+env restored in afterEach; preflight rejection engineered by flipping
+`WDK_TOOLS_SOURCE=live` AFTER previewTransfer succeeds (real
+`validateWalletTransferPolicy` rejection in `runFinancialTransfer`).
+
 ## Reservation-release amendment (2026-10-05, planning only — no implementation)
 
 **Binding user decision:** when a valid grant claim is followed by an
