@@ -3,7 +3,7 @@
 ## Review Workload Forecast
 
 | Field | Value |
-|---|---|
+| --- | --- |
 | Estimated changed lines | 650–900 |
 | 400-line budget risk | High |
 | Chained PRs recommended | No; Ramiro authorized one reviewable PR per slice |
@@ -24,10 +24,10 @@ Chain strategy: size-exception
 
 ## Phase 1: RED contracts
 
-- [ ] 1.1 RED: raw-byte signatures, ±300-second timestamps, wallet identity resolution, and invalid-webhook no-side-effects.
-- [ ] 1.2 RED: assistant state mapping (`uncertain` included, `not_dispatched` excluded), outbox replay, dedupe race, and safe projection.
-- [ ] 1.3 RED: cursor retry/order, worker exclusion/backoff, and user/system RLS boundaries.
-- [ ] 1.4 RED frontend: empty/unread/read, focus/visible polling, LiveKit refresh.
+- [x] 1.1 RED: raw-byte signatures, ±300-second timestamps, wallet identity resolution, and invalid-webhook no-side-effects.
+- [x] 1.2 RED: assistant state mapping (`uncertain` included, `not_dispatched` excluded), outbox replay, dedupe race, and safe projection.
+- [x] 1.3 RED: cursor retry/order, worker exclusion/backoff, and user/system RLS boundaries.
+- [x] 1.4 RED frontend: empty/unread/read, focus/visible polling, LiveKit refresh.
 
 ## Phase 2: Durable backend
 
