@@ -295,30 +295,30 @@ describe("grant-covered conversation gate (phase 3 RED)", () => {
     );
   });
 
-      it("RED: covered turn with financial tasks resolves to the terminal sent result", async () => {
-        const grantGate = vi.fn(async () => ({ covered: true as const }));
-        const registry = new FinancialTaskRegistry();
-        const service = createWalletConversationService({
-          conversations: repositoryFixture(),
-          wallet: new FixtureWalletProvider(),
-          grantGate: { evaluate: grantGate },
-          financialTasks: registry,
-        });
-        const streamed = await events(service, {
-          conversationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          userId,
-          text: `Send 10 USDT to ${recipient}`,
-        });
-        const completed = streamed.find((event) => event.type === "turn-completed");
-        const turn = (
-          completed as { type: "turn-completed"; result: { status: string } }
-        ).result;
-        // waitForFinancialTask on the internal delegated_grant resolve yields
-        // the terminal result, not the generic "Transfer is being processed."
-        expect(turn.status).toBe("sent");
-      });
-    
-      it("RED: a degraded request keeps the existing confirmation_required preview flow", async () => {
+  it("RED: covered turn with financial tasks resolves to the terminal sent result", async () => {
+    const grantGate = vi.fn(async () => ({ covered: true as const }));
+    const registry = new FinancialTaskRegistry();
+    const service = createWalletConversationService({
+      conversations: repositoryFixture(),
+      wallet: new FixtureWalletProvider(),
+      grantGate: { evaluate: grantGate },
+      financialTasks: registry,
+    });
+    const streamed = await events(service, {
+      conversationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      userId,
+      text: `Send 10 USDT to ${recipient}`,
+    });
+    const completed = streamed.find((event) => event.type === "turn-completed");
+    const turn = (
+      completed as { type: "turn-completed"; result: { status: string } }
+    ).result;
+    // waitForFinancialTask on the internal delegated_grant resolve yields
+    // the terminal result, not the generic "Transfer is being processed."
+    expect(turn.status).toBe("sent");
+  });
+
+  it("RED: a degraded request keeps the existing confirmation_required preview flow", async () => {
     const service = createWalletConversationService({
       conversations: repositoryFixture(),
       wallet: new FixtureWalletProvider(),

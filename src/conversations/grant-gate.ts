@@ -61,9 +61,9 @@ function exactDecimalAmount(value: string): string | null {
   return trimmed;
 }
 
-export function createGrantGate(
-  dependencies: GrantGateDependencies,
-): { evaluate(input: GrantGateInput): Promise<GrantGateDecision> } {
+export function createGrantGate(dependencies: GrantGateDependencies): {
+  evaluate(input: GrantGateInput): Promise<GrantGateDecision>;
+} {
   const clock = dependencies.clock ?? { now: () => Date.now() };
   return {
     async evaluate(input: GrantGateInput): Promise<GrantGateDecision> {
@@ -87,7 +87,9 @@ export function createGrantGate(
 
         const amount = exactDecimalAmount(amountText);
         if (amount === null) return null;
-        if (tokenText.toUpperCase() !== input.pendingTransfer.token.toUpperCase()) {
+        if (
+          tokenText.toUpperCase() !== input.pendingTransfer.token.toUpperCase()
+        ) {
           return null;
         }
         // The parsed recipient must BE the pending preview's recipient
@@ -108,8 +110,10 @@ export function createGrantGate(
         );
         const tokens = await provider.listTokens(SUPPORTED_NETWORK);
         const decimals =
-          tokens.find((t: { token: string; decimals: number }) => t.token === input.pendingTransfer.token)?.decimals ??
-          null;
+          tokens.find(
+            (t: { token: string; decimals: number }) =>
+              t.token === input.pendingTransfer.token,
+          )?.decimals ?? null;
 
         const candidates = await dependencies.grants.listGrants(input.userId);
         const decision = classifyGrantCoverage({

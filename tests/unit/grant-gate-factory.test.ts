@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGrantGate } from "../../src/conversations/grant-gate.js";
-import type { DelegatedGrantService, DelegatedGrantRow } from "../../src/wallet/grants/consumption.js";
+import type {
+  DelegatedGrantService,
+  DelegatedGrantRow,
+} from "../../src/wallet/grants/consumption.js";
 import type { WalletProvider } from "../../src/wallet/provider.js";
 
 /**
@@ -17,7 +20,9 @@ const grantId = "11111111-1111-4111-8111-111111111111";
 const RECIPIENT = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 const NOW = Date.parse("2026-10-05T00:00:00.000Z");
 
-function grantRow(overrides: Partial<DelegatedGrantRow> = {}): DelegatedGrantRow {
+function grantRow(
+  overrides: Partial<DelegatedGrantRow> = {},
+): DelegatedGrantRow {
   return {
     id: grantId,
     userId,
@@ -50,7 +55,12 @@ function fixtures(options: {
     listGrants: vi.fn(async () => options.grants ?? []),
   } as unknown as DelegatedGrantService;
   const provider = {
-    listTokens: vi.fn(async () => options.listTokens ?? [{ network: "solana-devnet", token: "SOL", decimals: 9 }]),
+    listTokens: vi.fn(
+      async () =>
+        options.listTokens ?? [
+          { network: "solana-devnet", token: "SOL", decimals: 9 },
+        ],
+    ),
   } as unknown as WalletProvider;
   const walletForUser = vi.fn(async () => provider);
   const clock = { now: () => NOW };
@@ -75,7 +85,11 @@ describe("createGrantGate (phase 3 factory)", () => {
   it("exact hit: bound intent + covering grant returns covered with grant id", async () => {
     const { gate, grants, walletForUser } = fixtures({ grants: [grantRow()] });
     const decision = await gate.evaluate(baseInput);
-    expect(decision).toEqual({ covered: true, source: "delegated_grant", grantId });
+    expect(decision).toEqual({
+      covered: true,
+      source: "delegated_grant",
+      grantId,
+    });
     expect(grants.resolveWalletId).toHaveBeenCalledWith(userId, "solana");
     expect(walletForUser).toHaveBeenCalledWith(userId, "solana");
   });
@@ -137,7 +151,10 @@ describe("createGrantGate (phase 3 factory)", () => {
   });
 
   it("ledger failure degrades closed instead of throwing", async () => {
-    const { gate } = fixtures({ grants: [grantRow()], resolveWalletError: true });
+    const { gate } = fixtures({
+      grants: [grantRow()],
+      resolveWalletError: true,
+    });
     const decision = await gate.evaluate(baseInput);
     expect(decision).toBeNull();
   });

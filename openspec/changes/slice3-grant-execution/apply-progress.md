@@ -95,3 +95,24 @@ network, no candidates, ledger failure).
 
 Phase 4 — atomic claim integration (DB): claimConsumption authority, races, replay two-gate
 semantics, revoke/expiry between preview and execution, window rejection.
+
+### Environment note (2026-10-05)
+
+- `delegated-grants-consumption` against `dgc-test-db-1`
+  (`postgresql://postgres@127.0.0.1:55499/wdk_agent`): **14/14 pass**
+  (verified independently by Ramiro). An earlier "14 fails" reading came from
+  a WRONG `DATABASE_URL` (database=postgres, wrong port) — not evidence of
+  failure; do not cite it.
+- Fresh migrated DB ready for Phase 4:
+  `postgresql://postgres@127.0.0.1:55501/wdk_agent?options=-csearch_path%3Dpublic,extensions`
+  (extensions schema present, recipient_app granted).
+- Fresh full suite result (run by Ramiro): **10 failing / 836 passing /
+  10 skipped**. Failures are `api-contacts` timeouts, extension-schema
+  permission issues (predating this change's grant), and sentinel config;
+  comparison against CI/main pending before attributing any of them to this
+  change.
+- Targeted conversation subset on the fresh DB
+  (`api-conversation-service`, `api-conversation-resolution`,
+  `conversation-preview-claim-race`, `voice-touch-decision-race`):
+  **4 files / 6 tests pass**. The `api-contacts` rerun that hung >2 min with
+  no active DB query was stopped rather than waiting for timeouts.

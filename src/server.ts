@@ -207,29 +207,29 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
       identityProviderMode === "demo"
         ? getConfiguredRecipientMemoryRuntime()
         : undefined;
-        const service = createWalletConversationService({
-          conversations,
-          wallet: core.wallet,
-          ...(walletForUser ? { walletForUser } : {}),
-          financialTasks,
-          contextRenewal: core.contextRenewal,
-          // slice3-grant-execution: server-owned grant gate (original user
-          // turn path only; the service never consults it for model-tool
-          // previews). Requires the resolved chain-aware wallet seam; absent
-          // seam ⇒ no gate ⇒ today's unconditional preview + confirmation.
-          ...(walletForUser
-            ? {
-                grantGate: createGrantGate({
-                  grants,
-                  walletForUser,
-                }),
-              }
-            : {}),
-          // PMU-014: memory scoped to the RESOLVED per-request user in every mode;
-          // the fixed demo runtime (if configured) is only a fallback.
-          ...(memory ? { memory } : {}),
-          memoryForUser: (userId) => getMemoryRuntimeForUser(userId),
-        });
+    const service = createWalletConversationService({
+      conversations,
+      wallet: core.wallet,
+      ...(walletForUser ? { walletForUser } : {}),
+      financialTasks,
+      contextRenewal: core.contextRenewal,
+      // slice3-grant-execution: server-owned grant gate (original user
+      // turn path only; the service never consults it for model-tool
+      // previews). Requires the resolved chain-aware wallet seam; absent
+      // seam ⇒ no gate ⇒ today's unconditional preview + confirmation.
+      ...(walletForUser
+        ? {
+            grantGate: createGrantGate({
+              grants,
+              walletForUser,
+            }),
+          }
+        : {}),
+      // PMU-014: memory scoped to the RESOLVED per-request user in every mode;
+      // the fixed demo runtime (if configured) is only a fallback.
+      ...(memory ? { memory } : {}),
+      memoryForUser: (userId) => getMemoryRuntimeForUser(userId),
+    });
 
     // PMU-004: demo-mode startup provisions the sentinel before serving
     // requests, including the seed-before-server flow.
