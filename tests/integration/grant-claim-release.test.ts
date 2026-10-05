@@ -67,11 +67,13 @@ let userId = "";
  * harness collisions without touching any constraint. `userId` (module-level)
  * is reassigned per test so every helper threads the right owner.
  */
-async function provisionTestContext(options: {
-  policyId?: string | null;
-  maxPerTransfer?: string;
-  maxCumulative?: string;
-} = {}): Promise<{ userId: string; walletId: string; grantId: string }> {
+async function provisionTestContext(
+  options: {
+    policyId?: string | null;
+    maxPerTransfer?: string;
+    maxCumulative?: string;
+  } = {},
+): Promise<{ userId: string; walletId: string; grantId: string }> {
   const testUser = await provisionUser();
   userId = testUser;
   conversationId = randomUUID(); // per-test conversation, same owner
@@ -228,11 +230,16 @@ type ConversationRepositoryLike =
 function repositorySpy(input: {
   events: string[];
   attemptId: string;
+  /** DB-minted claim_id so the spy's winner returns the persisted token. */
+  claimId?: string;
   failAfter?: "cas" | "ledger" | "audit";
 }): ConversationRepositoryLike {
   const { events, attemptId } = input;
   let status = "previewed";
-  const claimId = randomUUID();
+  // The DB-minted ownership token (insertAttempt) or a generated one: the
+  // spy's winner transition must return EXACTLY the persisted token so the
+  // service threads it and the real settlement CAS matches.
+  const claimId = input.claimId ?? randomUUID();
   // Start EMPTY (proven phase-4 pattern): the turn itself creates and
   // persists the pendingTransfer + its attempt row. No stale preexisting
   // preview — Q1 never auto-executes previews older than the grant.
@@ -266,22 +273,22 @@ function repositorySpy(input: {
     ) {
       snapshot.messages.push(m);
     },
-        async saveSnapshot(_u: string, incoming: typeof snapshot) {
-          // Durable semantics (phase-4 mirror): a snapshot carrying a NEW
-          // pendingTransfer without an attempt id creates the attempt row and
-          // attaches its durable id as previewId.
-          let pending = incoming.pendingTransfer;
-          if (pending && !pending.previewId) {
-            pending = { ...pending, previewId: attemptRecord.id };
-            events.push(`attempt:previewed:${attemptRecord.id}`);
-          }
-          snapshot = {
-            ...incoming,
-            ...(pending ? { pendingTransfer: pending } : {}),
-            revision: incoming.revision + 1,
-          };
-          return snapshot;
-        },
+    async saveSnapshot(_u: string, incoming: typeof snapshot) {
+      // Durable semantics (phase-4 mirror): a snapshot carrying a NEW
+      // pendingTransfer without an attempt id creates the attempt row and
+      // attaches its durable id as previewId.
+      let pending = incoming.pendingTransfer;
+      if (pending && !pending.previewId) {
+        pending = { ...pending, previewId: attemptRecord.id };
+        events.push(`attempt:previewed:${attemptRecord.id}`);
+      }
+      snapshot = {
+        ...incoming,
+        ...(pending ? { pendingTransfer: pending } : {}),
+        revision: incoming.revision + 1,
+      };
+      return snapshot;
+    },
     async updateState(
       _u: string,
       _c: string,
@@ -307,7 +314,11 @@ function repositorySpy(input: {
       return snapshot.revision + 1;
     },
     async clearPendingTransfer() {
-      snapshot = { ...snapshot, pendingTransfer: undefined, revision: snapshot.revision + 1 };
+      snapshot = {
+        ...snapshot,
+        pendingTransfer: undefined,
+        revision: snapshot.revision + 1,
+      };
       return snapshot.revision + 1;
     },
     async cancelPendingTransfer() {
@@ -391,16 +402,15 @@ function repositorySpy(input: {
   return repository as unknown as ConversationRepositoryLike;
 }
 
-function notDispatchedWallet(
-  events: string[],
-): { wallet: FixtureWalletProvider; spy: ReturnType<typeof vi.spyOn> } {
+function notDispatchedWallet(events: string[]): {
+  wallet: FixtureWalletProvider;
+  spy: ReturnType<typeof vi.spyOn>;
+} {
   const wallet = new FixtureWalletProvider();
-  const spy = vi
-    .spyOn(wallet, "broadcastTransfer")
-    .mockResolvedValue({
-      kind: "not_dispatched" as const,
-      reason: "Fixture injected no-dispatch (phase 8 RED).",
-    });
+  const spy = vi.spyOn(wallet, "broadcastTransfer").mockResolvedValue({
+    kind: "not_dispatched" as const,
+    reason: "Fixture injected no-dispatch (phase 8 RED).",
+  });
   void events; // events recorded via service/repository spy instead
   return { wallet, spy };
 }
@@ -566,7 +576,12 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
       },
     ) => Promise<{ released: boolean }>;
     await database.withUserTransaction(userId, async (tx) => {
-      await release(tx, { grantId, userId, idempotencyKey: key, reason: "not_dispatched" });
+      await release(tx, {
+        grantId,
+        userId,
+        idempotencyKey: key,
+        reason: "not_dispatched",
+      });
     });
 
     // RED: the replay branch of claimConsumption currently returns
@@ -590,38 +605,41 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     expect(fresh.consumed).toBe(true);
   });
 
-      // ---------------------------------------------------------- 8.2b/8.4b RED
-      it("8.4b RED: real PostgresConversationRepository.claimPendingTransfer returns the persisted claim_id", async () => {
-        // REAL repository (no spy): the persisted claim_id must flow back to
-        // the winner. RED today: PendingTransferClaim has no claimId field.
-        const { PostgresConversationRepository } = await import(
-          "../../src/conversations/postgres-repository.js"
-        );
-        const repository = new PostgresConversationRepository(database);
-        const attemptId = await insertAttempt({ status: "previewed" });
-        const persisted = await getAttempt(attemptId);
-        // No claim_id yet: it is minted by the winner transition itself.
-        expect(persisted?.claim_id).toBeNull();
+  // ---------------------------------------------------------- 8.2b/8.4b RED
+  it("8.4b RED: real PostgresConversationRepository.claimPendingTransfer returns the persisted claim_id", async () => {
+    // REAL repository (no spy): the persisted claim_id must flow back to
+    // the winner. RED today: PendingTransferClaim has no claimId field.
+    const { PostgresConversationRepository } = await import(
+      "../../src/conversations/postgres-repository.js"
+    );
+    const repository = new PostgresConversationRepository(database);
+    const attemptId = await insertAttempt({ status: "previewed" });
+    const persisted = await getAttempt(attemptId);
+    // No claim_id yet: it is minted by the winner transition itself.
+    expect(persisted?.claim_id).toBeNull();
 
-        const result = (await repository.claimPendingTransfer(
-          userId,
-          conversationId,
-          attemptId,
-        )) as { status: string; claimId?: string };
+    const result = (await repository.claimPendingTransfer(
+      userId,
+      conversationId,
+      attemptId,
+    )) as { status: string; claimId?: string };
 
-        expect(result.status).toBe("claimed");
-        // GREEN contract: result.claimId === the claim_id the CAS persisted.
-        // RED today: the field does not exist on the result (undefined).
-        const afterClaim = await getAttempt(attemptId);
-        expect(afterClaim?.status).toBe("broadcasting");
-        expect(afterClaim?.claim_id).not.toBeNull();
-        expect(result.claimId).toBe(afterClaim!.claim_id);
-      });
+    expect(result.status).toBe("claimed");
+    // GREEN contract: result.claimId === the claim_id the CAS persisted.
+    // RED today: the field does not exist on the result (undefined).
+    const afterClaim = await getAttempt(attemptId);
+    expect(afterClaim?.status).toBe("broadcasting");
+    expect(afterClaim?.claim_id).not.toBeNull();
+    expect(result.claimId).toBe(afterClaim!.claim_id);
+  });
 
-      it("8.2b RED: atomic all-or-nothing settlement — injected failure rolls back all three effects (DB re-read)", async () => {
+  it("8.2b RED: atomic all-or-nothing settlement — injected failure rolls back all three effects (DB re-read)", async () => {
     for (const failAfter of ["cas", "ledger", "audit"] as const) {
       const { grantId } = await provisionTestContext({ policyId: "policy-x" });
-      const attemptId = await insertAttempt({ status: "broadcasting", claimId: randomUUID() });
+      const attemptId = await insertAttempt({
+        status: "broadcasting",
+        claimId: randomUUID(),
+      });
       const key = `grant-exec:${userId}:${attemptId}`;
       await grants.claimConsumption({
         grantId,
@@ -828,11 +846,14 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     expect(await releasedAuditCount(grantId, key)).toBe(0);
   });
 
-  it("8.4 RED: service settles preflight rejection from owned broadcasting via the settlement CAS (not the legacy reset)", async () => {
+  it("8.4 GREEN: service settles preflight rejection from owned broadcasting via the settlement CAS (not the legacy reset)", async () => {
     const { grantId } = await provisionTestContext({ policyId: "policy-x" });
+    // DB attempt seeded BROADCASTING with the exact ownership token the
+    // spy's winner will return: the real settlement CAS must match it.
+    const ownedClaimId = randomUUID();
     const attemptId = await insertAttempt({
-      status: "previewed",
-      claimId: randomUUID(),
+      status: "broadcasting",
+      claimId: ownedClaimId,
     });
     const key = `grant-exec:${userId}:${attemptId}`;
     await grants.claimConsumption({
@@ -843,16 +864,20 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     });
 
     const events: string[] = [];
-    const repository = repositorySpy({ events, attemptId });
-    // Preflight-after-claim (RED): previewTransfer succeeds while the
-    // source is fixture; flipping to 'live' AFTER the preview makes
-    // validateWalletTransferPolicy reject in runFinancialTransfer
-    // (WDK_MAX_TRANSFER_AMOUNT/WDK_ALLOWED_RECIPIENTS absent) — a real
-    // policy rejection from the OWNED broadcasting state, before any
-    // broadcast.
+    const repository = repositorySpy({
+      events,
+      attemptId,
+      claimId: ownedClaimId,
+    });
+    // Preflight-after-claim: previewTransfer succeeds while the source is
+    // fixture; flipping to 'live' AFTER the preview makes
+    // validateWalletTransferPolicy reject in runFinancialTransfer (env
+    // vars absent) — a real policy rejection from the OWNED broadcasting
+    // state, before any broadcast.
     const wallet = new FixtureWalletProvider();
-    const previewSpy = vi.spyOn(wallet, "previewTransfer").mockImplementation(
-      async (...args: unknown[]) => {
+    const previewSpy = vi
+      .spyOn(wallet, "previewTransfer")
+      .mockImplementation(async (...args: unknown[]) => {
         process.env.WDK_TOOLS_SOURCE = "live";
         const preview = {
           network: "base-sepolia",
@@ -863,12 +888,27 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
         };
         void args;
         return preview;
-      },
-    );
+      });
     const service = createWalletConversationService({
       conversations: repository,
       wallet,
-      grantLedger: { claim: grants.claimConsumption.bind(grants) },
+      grantLedger: {
+        claim: grants.claimConsumption.bind(grants),
+        settle: (i) => {
+          events.push(
+            `settle:${i.reason}:claimIdMatch=${i.claimId === ownedClaimId}`,
+          );
+          return grants.settleGrantReservation({
+            userId,
+            conversationId,
+            attemptId: i.attemptId,
+            claimId: i.claimId,
+            grantId: i.grantId,
+            idempotencyKey: i.idempotencyKey,
+            reason: i.reason,
+          });
+        },
+      },
       grantGate: {
         evaluate: async () => ({
           covered: true,
@@ -886,24 +926,33 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
       void _;
 
     // The claim was won (owned broadcasting state) before the rejection.
-    expect(
-      events.some((e) => e.startsWith("attempt:broadcasting:")),
-    ).toBe(true);
+    expect(events.some((e) => e.startsWith("attempt:broadcasting:"))).toBe(
+      true,
+    );
     expect(previewSpy).toHaveBeenCalledTimes(1);
 
-    // GREEN contract: settlement CAS (owned broadcasting→cancelled) + release.
-    // RED today: the service calls the legacy releasePendingTransferClaim
-    // (broadcasting→previewed reset) and never releases the grant claim.
-    expect(events.some((e) => e === "legacy:releasePendingTransferClaim")).toBe(true);
-    expect(events.some((e) => e.startsWith("settle:"))).toBe(true);
-    expect((await claimRow(grantId, key))?.released_at).not.toBeNull();
+    // GREEN contract: settlement CAS (owned broadcasting→cancelled) +
+    // ledger release + released audit, replacing the legacy reset.
+    expect(events.some((e) => e === "legacy:releasePendingTransferClaim")).toBe(
+      false,
+    );
+    expect(
+      events.some((e) => e === "settle:policy_rejected:claimIdMatch=true"),
+    ).toBe(true);
+    expect((await getAttempt(attemptId))?.status).toBe("cancelled");
+    const row = await claimRow(grantId, key);
+    expect(row?.released_at).not.toBeNull();
+    expect(row?.released_reason).toBe("policy_rejected");
+    expect(await releasedAuditCount(grantId, key)).toBe(1);
   });
 
-  it("8.4 RED: provider not_dispatched settles from owned broadcasting via the settlement CAS and releases the reservation", async () => {
+  it("8.4 GREEN: provider not_dispatched settles from owned broadcasting via the settlement CAS and releases the reservation", async () => {
     const { grantId } = await provisionTestContext({ policyId: "policy-x" });
+    // DB attempt seeded BROADCASTING with the exact ownership token.
+    const ownedClaimId = randomUUID();
     const attemptId = await insertAttempt({
-      status: "previewed",
-      claimId: randomUUID(),
+      status: "broadcasting",
+      claimId: ownedClaimId,
     });
     const key = `grant-exec:${userId}:${attemptId}`;
     await grants.claimConsumption({
@@ -914,12 +963,32 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     });
 
     const events: string[] = [];
-    const repository = repositorySpy({ events, attemptId });
+    const repository = repositorySpy({
+      events,
+      attemptId,
+      claimId: ownedClaimId,
+    });
     const { wallet, spy } = notDispatchedWallet(events);
     const service = createWalletConversationService({
       conversations: repository,
       wallet,
-      grantLedger: { claim: grants.claimConsumption.bind(grants) },
+      grantLedger: {
+        claim: grants.claimConsumption.bind(grants),
+        settle: (i) => {
+          events.push(
+            `settle:${i.reason}:claimIdMatch=${i.claimId === ownedClaimId}`,
+          );
+          return grants.settleGrantReservation({
+            userId,
+            conversationId,
+            attemptId: i.attemptId,
+            claimId: i.claimId,
+            grantId: i.grantId,
+            idempotencyKey: i.idempotencyKey,
+            reason: i.reason,
+          });
+        },
+      },
       grantGate: {
         evaluate: async () => ({
           covered: true,
@@ -940,27 +1009,37 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     // settlement and release the reservation. RED: today the service only
     // calls the legacy reset; no ledger release happens. The provider WAS
     // invoked and returned not_dispatched (spy-proven):
-        expect(spy).toHaveBeenCalledTimes(1);
-        // The spy is mockResolvedValue: the awaited resolved value carries the
-        // kind. Await it and assert the provider answered not_dispatched.
-        const outcome = (await spy.mock.results[0]?.value) as
-          | { kind?: string }
-          | undefined;
-        expect(outcome?.kind).toBe("not_dispatched");
-    expect(events.some((e) => e.startsWith("settle:not_dispatched"))).toBe(true);
-    expect(events.some((e) => e === "legacy:releasePendingTransferClaim")).toBe(false);
-    expect((await claimRow(grantId, key))?.released_at).not.toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The spy is mockResolvedValue: the awaited resolved value carries the
+    // kind. Await it and assert the provider answered not_dispatched.
+    const outcome = (await spy.mock.results[0]?.value) as
+      | { kind?: string }
+      | undefined;
+    expect(outcome?.kind).toBe("not_dispatched");
+    // GREEN contract: settlement ran on the owned broadcasting row with the
+    // exact persisted token, cancelled the attempt, and released the
+    // reservation with the not_dispatched reason.
+    expect(events).toContain("settle:not_dispatched:claimIdMatch=true");
+    expect(events.some((e) => e === "legacy:releasePendingTransferClaim")).toBe(
+      false,
+    );
+    expect((await getAttempt(attemptId))?.status).toBe("cancelled");
+    const row = await claimRow(grantId, key);
+    expect(row?.released_at).not.toBeNull();
+    expect(row?.released_reason).toBe("not_dispatched");
     expect(await releasedAuditCount(grantId, key)).toBe(1);
   });
 
   // ---------------------------------------------------------------- 8.3 RED
   it("8.3 RED: BOTH window sums count unreleased ledger rows (released stops counting, retained keeps counting)", async () => {
     // Small grant: two claims cannot both fit until one is released.
-    const grantId = await (await provisionTestContext({
-      policyId: "policy-x",
-      maxPerTransfer: AMOUNT,
-      maxCumulative: AMOUNT, // exactly one execution fits
-    })).grantId;
+    const grantId = await (
+      await provisionTestContext({
+        policyId: "policy-x",
+        maxPerTransfer: AMOUNT,
+        maxCumulative: AMOUNT, // exactly one execution fits
+      })
+    ).grantId;
     const keyA = `grant-exec:${userId}:8-3-a`;
     await grants.claimConsumption({
       grantId,
@@ -992,7 +1071,12 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
       },
     ) => Promise<{ released: boolean }>;
     await database.withUserTransaction(userId, async (tx) => {
-      await release(tx, { grantId, userId, idempotencyKey: keyA, reason: "not_dispatched" });
+      await release(tx, {
+        grantId,
+        userId,
+        idempotencyKey: keyA,
+        reason: "not_dispatched",
+      });
     });
 
     // GREEN contract: BOTH sums now exclude the released row, so a new claim
@@ -1007,13 +1091,13 @@ suite("phase 8: reservation release on definitive no-dispatch (RED)", () => {
     });
     expect(third.consumed).toBe(true);
 
-        // consumedInWindow (engine prefilter, module export) must also exclude
-        // the released row. RED today: it sums grant_audit_log 'used' rows,
-        // which still count the released reservation, so the total is 2x the
-        // live claim. It runs INSIDE a user-scoped transaction (RLS context).
-        const windowTotal = await database.withUserTransaction(userId, (client) =>
-          consumedInWindow(client, grantId, 3600),
-        );
-        expect(BigInt(windowTotal)).toBe(BigInt(AMOUNT)); // only the live claim counts
+    // consumedInWindow (engine prefilter, module export) must also exclude
+    // the released row. RED today: it sums grant_audit_log 'used' rows,
+    // which still count the released reservation, so the total is 2x the
+    // live claim. It runs INSIDE a user-scoped transaction (RLS context).
+    const windowTotal = await database.withUserTransaction(userId, (client) =>
+      consumedInWindow(client, grantId, 3600),
+    );
+    expect(BigInt(windowTotal)).toBe(BigInt(AMOUNT)); // only the live claim counts
   });
 });

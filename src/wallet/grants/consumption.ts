@@ -35,6 +35,7 @@ export type DelegatedGrantRow = {
 export type GrantAuditEvent =
   | "created"
   | "used"
+  | "released"
   | "rejected"
   | "revoked"
   | "expired"
@@ -75,6 +76,14 @@ export type ClaimConsumptionResult = {
    * appends a `rejected` audit row inside the same transaction.
    */
   reason?: string;
+};
+
+/** Result of the tx-only reservation release (AD-10). */
+export type ReleaseReservationResult = {
+  /** True when THIS call released the reservation. */
+  released: boolean;
+  /** True when the reservation was already released (idempotent no-op). */
+  replayedRelease?: boolean;
 };
 
 const GRANT_COLUMNS =
@@ -154,8 +163,11 @@ function parsePositiveAmount(raw: unknown): string | null {
 }
 
 /**
- * Sum of audited `used` amounts for a grant inside its rolling window
- * (created_at > now - window). Uses the passed clock so tests can pin time.
+ * Sum of UNRELEASED `grant_claim_ledger` reservations for a grant inside its
+ * rolling window (claimed_at > now - window; released_at IS NULL). AD-10: the
+ * window counts held reservations from the LEDGER, not audit rows, so a
+ * released reservation stops counting and its budget returns to the window.
+ * Uses the passed clock so tests can pin time.
  */
 export async function consumedInWindow(
   database: DatabaseClient | Queryable,
@@ -165,11 +177,10 @@ export async function consumedInWindow(
 ): Promise<string> {
   const run = (executor: Queryable) =>
     executor.query<{ total: string | null }>(
-      `SELECT COALESCE(SUM(amount), 0)::text AS total FROM grant_audit_log
+      `SELECT COALESCE(SUM(amount), 0)::text AS total FROM grant_claim_ledger
        WHERE grant_id = $1
-         AND event = 'used'
-         AND amount IS NOT NULL
-         AND created_at > $2`,
+         AND released_at IS NULL
+         AND claimed_at > $2`,
       [grantId, new Date(now.getTime() - windowSeconds * 1_000)],
     );
   // A DatabaseClient has no user context: RLS hides rows unless app.user_id is
@@ -267,7 +278,10 @@ export class DelegatedGrantService {
     input: CreateGrantInput,
   ): Promise<DelegatedGrantRow> {
     const perTransfer = normalizeDecimal(input.maxPerTransfer);
-    if (input.chain === "solana" && (!/^\d+$/.test(perTransfer) || BigInt(perTransfer) > 10_000_000n)) {
+    if (
+      input.chain === "solana" &&
+      (!/^\d+$/.test(perTransfer) || BigInt(perTransfer) > 10_000_000n)
+    ) {
       throw new InvalidGrantInputError(
         "Solana maxPerTransfer cannot exceed 0.01 SOL (10,000,000 lamports).",
       );
@@ -394,13 +408,36 @@ export class DelegatedGrantService {
       // Idempotency replay: the unique index on grant_id+idempotency_key decides.
       // The original result is returned verbatim; no second consumption, no second
       // audit row, no state mutation.
-      const replay = await client.query<{ amount: string }>(
-        `SELECT amount FROM grant_claim_ledger
+      // AD-10 retry contract: a RELEASED key is permanently retired — the
+      // replay NEVER returns consumed:true; it fails closed so a released
+      // reservation cannot authorize a broadcast. A retry of the request
+      // creates a FRESH persisted previewId (fresh key/reservation).
+      const replay = await client.query<{
+        amount: string;
+        released_at: Date | null;
+      }>(
+        `SELECT amount, released_at FROM grant_claim_ledger
              WHERE grant_id = $1 AND idempotency_key = $2`,
         [input.grantId, input.idempotencyKey],
       );
       const replayed = replay.rows[0];
       if (replayed) {
+        if (replayed.released_at !== null) {
+          // Released key: fail closed. No consumption, no broadcast
+          // authorization, and NEVER flagged as a replay (a released
+          // reservation must not look like the original claim returning).
+          await this.appendRejection(
+            client,
+            input,
+            "reservation_released",
+            null,
+          );
+          return {
+            consumed: false,
+            replay: false,
+            reason: "reservation_released",
+          };
+        }
         return {
           consumed: true,
           replay: true,
@@ -459,9 +496,9 @@ export class DelegatedGrantService {
       }
 
       const consumedResult = await client.query<{ total: string | null }>(
-        `SELECT COALESCE(SUM(amount), 0)::text AS total FROM grant_audit_log
-             WHERE grant_id = $1 AND event = 'used' AND amount IS NOT NULL
-               AND created_at > $2`,
+        `SELECT COALESCE(SUM(amount), 0)::text AS total FROM grant_claim_ledger
+             WHERE grant_id = $1 AND released_at IS NULL
+               AND claimed_at > $2`,
         [input.grantId, new Date(Date.now() - grant.windowSeconds * 1_000)],
       );
       const consumed = consumedResult.rows[0]?.total ?? "0";
@@ -513,7 +550,7 @@ export class DelegatedGrantService {
   ): Promise<void> {
     await client.query(
       `INSERT INTO grant_audit_log (grant_id, user_id, event, reason, amount, detail)
-           VALUES ($1, $2, 'rejected', $3, $4, $5)`,
+               VALUES ($1, $2, 'rejected', $3, $4, $5)`,
       [
         input.grantId,
         input.userId,
@@ -522,6 +559,147 @@ export class DelegatedGrantService {
         JSON.stringify({ idempotencyKey: input.idempotencyKey }),
       ],
     );
+  }
+
+  /**
+   * AD-10: the atomic grant settlement. ONE user-scoped transaction
+   * (`withUserTransaction` + per-grant advisory lock) performs ALL THREE
+   * effects on the SAME client: (1) the exact-owner attempt CAS
+   * `broadcasting → cancelled` (id + conversation + user + status +
+   * persisted claim_id must ALL match), (2) the ledger release via the
+   * tx-only method, (3) the compensating `released` audit row is written
+   * by that method. Any injected/real failure rolls back ALL THREE — no
+   * partial commits ever.
+   *
+   * Retention rules: a lost CAS (wrong/stale claimId, moved status,
+   * absent row, already-`cancelled`) returns WITHOUT releasing — the
+   * reservation is retained. The `failAfter` seam is TEST-ONLY (phase 8
+   * rollback proof): production callers must never pass it.
+   */
+  public async settleGrantReservation(input: {
+    userId: string;
+    conversationId: string;
+    attemptId: string;
+    claimId: string;
+    grantId: string;
+    idempotencyKey: string;
+    reason: string;
+    /** TEST-ONLY injection point for rollback proof. Never in production. */
+    failAfter?: "cas" | "ledger" | "audit";
+  }): Promise<void> {
+    return this.database.withUserTransaction(input.userId, async (client) => {
+      // Serialize all settlement decisions for this grant across instances.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `dgc-grant-${input.grantId}`,
+      ]);
+
+      // (1) Exact-owner CAS on the attempt row.
+      const cas = await client.query<{ id: string }>(
+        `UPDATE conversation_transfer_attempts
+                 SET status = 'cancelled', updated_at = now()
+               WHERE id = $1 AND conversation_id = $2 AND user_id = $3
+                 AND status = 'broadcasting' AND claim_id = $4
+               RETURNING id`,
+        [input.attemptId, input.conversationId, input.userId, input.claimId],
+      );
+      if (!cas.rowCount) {
+        // Lost CAS: retain, never release, never mutate anything else.
+        return;
+      }
+
+      if (input.failAfter === "cas") {
+        throw new Error("injected: after attempt CAS");
+      }
+
+      // (2)+(3) Ledger release + compensating audit on the SAME client,
+      // via the TX-ONLY method (single implementation of release
+      // semantics; the settlement owns the transaction). The
+      // failAfter:'ledger' test-only hook lives INSIDE that method,
+      // between the ledger UPDATE and the audit INSERT, to prove that
+      // boundary rolls back too.
+      await this.releaseReservationInTransaction(client, {
+        grantId: input.grantId,
+        userId: input.userId,
+        idempotencyKey: input.idempotencyKey,
+        reason: input.reason,
+        failAfter: input.failAfter === "ledger" ? "ledger" : undefined,
+      });
+
+      // Distinct boundary: the tx-only method returned having committed
+      // (inside this tx) BOTH the ledger UPDATE and the audit INSERT —
+      // test-only injection proves the post-audit edge rolls back too.
+      if (input.failAfter === "audit") {
+        throw new Error("injected: after audit insert");
+      }
+    });
+  }
+
+  /**
+   * AD-10: mark the EXACT reservation (grant + idempotency key) released
+   * with its reason and append the compensating `released` audit row —
+   * BOTH on the caller-provided transaction client. TX-ONLY: this method
+   * never opens, commits, or nests a transaction; the settlement caller
+   * owns the user-scoped transaction and the per-grant advisory lock, so
+   * any failure rolls back every settlement effect together.
+   *
+   * Idempotent: re-releasing an already-released row is a no-op that
+   * returns `replayedRelease: true` with the original timestamp/reason
+   * preserved (no second audit row). A replayed LIVE claim is never
+   * released by this path — release requires a settled definitive
+   * non-dispatch for THIS execution (the settlement caller's duty).
+   */
+  public async releaseReservationInTransaction(
+    tx: Queryable,
+    input: {
+      grantId: string;
+      userId: string;
+      idempotencyKey: string;
+      reason: string;
+      /** TEST-ONLY injection point: after the ledger UPDATE, before the audit INSERT. */
+      failAfter?: "ledger";
+    },
+  ): Promise<ReleaseReservationResult> {
+    // CAS on the exact row: only an UNRELEASED reservation can be marked
+    // released; the WHERE guards against double-release races.
+    const released = await tx.query<{ id: string }>(
+      `UPDATE grant_claim_ledger
+               SET released_at = now(), released_reason = $3
+             WHERE grant_id = $1 AND idempotency_key = $2 AND released_at IS NULL
+             RETURNING id`,
+      [input.grantId, input.idempotencyKey, input.reason],
+    );
+    if (!released.rowCount) {
+      // Already released (or no such claim row): idempotent no-op. Verify
+      // which one — a missing row is still a no-op for this tx-only path.
+      const existing = await tx.query<{ released_at: Date | null }>(
+        `SELECT released_at FROM grant_claim_ledger
+                 WHERE grant_id = $1 AND idempotency_key = $2`,
+        [input.grantId, input.idempotencyKey],
+      );
+      if (existing.rows[0]?.released_at !== null && existing.rows[0]) {
+        return { released: false, replayedRelease: true };
+      }
+      return { released: false };
+    }
+    // Compensating audit: one `released` row per actual release, keyed by
+    // the idempotency key in detail for correlation.
+    // TEST-ONLY boundary (failAfter:'ledger'): injected here — AFTER the
+    // exact ledger UPDATE above, BEFORE the audit INSERT — to prove that
+    // this edge rolls back the whole settlement in the real DB.
+    if (input.failAfter === "ledger") {
+      throw new Error("injected: after ledger release, before audit");
+    }
+    await tx.query(
+      `INSERT INTO grant_audit_log (grant_id, user_id, event, reason, detail)
+               VALUES ($1, $2, 'released', $3, $4)`,
+      [
+        input.grantId,
+        input.userId,
+        input.reason,
+        JSON.stringify({ idempotencyKey: input.idempotencyKey }),
+      ],
+    );
+    return { released: true };
   }
 }
 

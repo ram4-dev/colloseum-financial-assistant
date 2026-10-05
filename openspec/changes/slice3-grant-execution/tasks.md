@@ -122,7 +122,7 @@ Postgres (:55501). No implementation before RED evidence is recorded.
       (no `previewed → cancelled` path); ambiguous/absent
       ownership ⇒ retain; `releasePendingTransferClaim` broadcasting→previewed
       reset REPLACED — a released attempt is never re-opened.
-- [ ] 8.5 Implementation AFTER RED: migration `012_grant_claim_release.sql` +
+- [x] 8.5 Implementation AFTER RED: migration `012_grant_claim_release.sql` +
   Supabase mirror `20260901001100_grant_claim_release.sql` (additive columns,
   CHECK extension, UPDATE grant — after 8.1 RED); ledger
   `releaseReservationInTransaction` (tx-only)
@@ -132,10 +132,10 @@ Postgres (:55501). No implementation before RED evidence is recorded.
   8.3 RED); service settle wiring + attempt-state reads (after 8.4 RED);
   atomic settlement with claim_id CAS + `claimPendingTransfer` result change +
   `releasePendingTransferClaim` replacement (after 8.4b RED).
-- [ ] 8.6 GREEN/TRIANGULATE: focused DB suites on :55501, `npm test`,
+- [x] 8.6 GREEN/TRIANGULATE: focused DB suites on :55501, `npm test`,
   `npm run typecheck`, `npm run lint`; record RED/GREEN evidence in
   apply-progress before any commit beyond the SDD amendment.
-- [ ] 8.7 RED-first provider guard restoration (HIGH PR #3; AD-11): RED tests in
+- [x] 8.7 RED-first provider guard restoration (HIGH PR #3; AD-11): RED tests in
   `tests/unit/solana-devnet-provider.test.ts` prove missing/empty/whitespace
   `previewId` resolves `not_dispatched` BEFORE `getRecentBlockhash` and BEFORE
   `signAndSend` (spy seams assert zero calls), with no timestamp/random fallback;
@@ -143,7 +143,7 @@ Postgres (:55501). No implementation before RED evidence is recorded.
   identity. GREEN restores the fail-closed guard in
   `src/wallet/solana-devnet-provider.ts` only after RED evidence is recorded;
   budget claim/refund semantics stay out of scope (AD-10 governs release).
-- [ ] 8.8 E2E verification per AGENTS.md after 8.7 GREEN: focused unit + DB
+- [x] 8.8 E2E verification per AGENTS.md after 8.7 GREEN: focused unit + DB
   suites on :55501, `npm test`, `npm run typecheck`, `npm run lint`, and the
   covered-path E2E fixtures (`tests/e2e/grant-gate-entries.e2e.test.ts`,
   `tests/e2e/grant-gate-model-origin.e2e.test.ts`); record evidence in

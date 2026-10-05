@@ -80,6 +80,14 @@ export type ResolveDecisionInput = {
    * message is appended and narration/audit stay accurate.
    */
   authorizedBy?: "user" | "delegated_grant";
+  /**
+   * AD-10: identity of the grant reservation claimed for THIS execution
+   * (set by the delegated-grant path when a candidate wins the ledger
+   * claim). Threaded into runFinancialTransfer so a definitive
+   * non-dispatch settles the EXACT reservation — never released without
+   * this complete identity (fail closed, retain).
+   */
+  claimedGrantId?: string;
 };
 
 export type PreviewTransferInput = {
@@ -230,6 +238,20 @@ export type WalletConversationDependencies = {
       amount: string;
       idempotencyKey: string;
     }): Promise<{ consumed: boolean; replay?: boolean; reason?: string }>;
+    /**
+     * AD-10: atomic owned-CAS settlement (attempt CAS + ledger release +
+     * `released` audit in ONE user-scoped transaction). Optional for
+     * callers that do not settle grants; absent ⇒ no-op.
+     */
+    settle?(input: {
+      userId: string;
+      conversationId: string;
+      attemptId: string;
+      claimId: string;
+      grantId: string;
+      idempotencyKey: string;
+      reason: string;
+    }): Promise<void>;
   };
 };
 
@@ -464,6 +486,9 @@ export function createWalletConversationService(
     if (result.status === "confirmation_required") {
       const pending = visible.pendingTransfer;
       if (dependencies.grantGate && pending?.previewId) {
+        // AD-10: winner reservation identity, hoisted so the settle path
+        // inside resolveDecision → runFinancialTransfer can use it.
+        let claimedGrantId: string | undefined;
         let decision: {
           covered: boolean;
           source?: "delegated_grant";
@@ -540,6 +565,10 @@ export function createWalletConversationService(
                 });
                 if (claim.consumed === true) {
                   claimed = true;
+                  // Preserve the winner's reservation identity for the
+                  // settle path (AD-10): only the EXACT claimed grant may
+                  // be released on definitive non-dispatch.
+                  claimedGrantId = grantId;
                   break; // winning candidate charged; proceed to attempt
                 }
                 // Rejected ⇒ audited by the ledger; try next candidate.
@@ -560,6 +589,7 @@ export function createWalletConversationService(
             decision: "confirm",
             signal: input.signal,
             authorizedBy: decision.source ?? "delegated_grant",
+            claimedGrantId,
             // The covered turn must resolve to its TERMINAL result in
             // this turn: wait for the financial task instead of the
             // generic "Transfer is being processed." answer.
@@ -710,7 +740,12 @@ export function createWalletConversationService(
     }
     const claimed = claim.transfer;
     const run = async (): Promise<void> => {
-      await runFinancialTransfer({ ...input, claimed, snapshot });
+      await runFinancialTransfer({
+        ...input,
+        claimed,
+        claimId: claim.claimId,
+        snapshot,
+      });
     };
     if (dependencies.financialTasks) {
       const started = dependencies.financialTasks.start({
@@ -759,7 +794,12 @@ export function createWalletConversationService(
       return;
     }
 
-    const result = await runFinancialTransfer({ ...input, claimed, snapshot });
+    const result = await runFinancialTransfer({
+      ...input,
+      claimed,
+      claimId: claim.claimId,
+      snapshot,
+    });
     const updated =
       (await dependencies.conversations.get(
         input.userId,
@@ -908,6 +948,9 @@ export function createWalletConversationService(
     conversationId: string;
     userId: string;
     previewId: string;
+    claimId?: string;
+    claimedGrantId?: string;
+    authorizedBy?: "user" | "delegated_grant";
     claimed: PendingTransfer & { previewId: string };
     snapshot: ConversationSnapshot;
   }): Promise<ConversationTurnResult> {
@@ -922,14 +965,42 @@ export function createWalletConversationService(
       dependencies.memory,
     );
     if (policyError || !recipientValid) {
-      await dependencies.conversations.releasePendingTransferClaim(
-        userId,
-        conversationId,
-      );
-      await dependencies.conversations.clearPendingTransfer(
-        userId,
-        conversationId,
-      );
+      // AD-10: preflight rejection is a definitive non-dispatch —
+      // settle the reservation ONLY with complete grant identity on
+      // the delegated-grant path. Without it: fail closed, retain
+      // (never release with empty identities). The legacy
+      // broadcasting→previewed reset is replaced here.
+      if (
+        input.authorizedBy === "delegated_grant" &&
+        input.claimId &&
+        input.claimedGrantId &&
+        dependencies.grantLedger?.settle
+      ) {
+        await dependencies.grantLedger.settle({
+          userId,
+          conversationId,
+          attemptId: input.previewId,
+          claimId: input.claimId,
+          grantId: input.claimedGrantId,
+          idempotencyKey: `grant-exec:${userId}:${input.previewId}`,
+          reason: policyError
+            ? "policy_rejected"
+            : "recipient_revalidation_required",
+        });
+        // The reservation key is retired. Any retry must create a new
+        // persisted preview and claim a fresh reservation.
+        await dependencies.conversations.clearPendingTransfer(
+          userId,
+          conversationId,
+        );
+      } else if (input.authorizedBy !== "delegated_grant") {
+        // Preserve the existing explicit-user retry behavior. Slice 3's
+        // terminal cancellation and fresh-preview rule applies to grants.
+        await dependencies.conversations.releasePendingTransferClaim(
+          userId,
+          conversationId,
+        );
+      }
       const result = errorResult(
         errorFromCode(
           policyError ? "policy_rejected" : "recipient_revalidation_required",
@@ -983,10 +1054,39 @@ export function createWalletConversationService(
     }
 
     if (broadcast.kind === "not_dispatched") {
-      await dependencies.conversations.releasePendingTransferClaim(
-        userId,
-        conversationId,
-      );
+      // AD-10: definitive non-dispatch — settle ONLY with complete
+      // grant identity on the delegated-grant path; otherwise retain
+      // (fail closed, no empty-identity release). The stale pending
+      // transfer is cleared so any retry requires a FRESH persisted
+      // preview (the cancelled attempt is never re-opened).
+      if (
+        input.authorizedBy === "delegated_grant" &&
+        input.claimId &&
+        input.claimedGrantId &&
+        dependencies.grantLedger?.settle
+      ) {
+        await dependencies.grantLedger.settle({
+          userId,
+          conversationId,
+          attemptId: input.previewId,
+          claimId: input.claimId,
+          grantId: input.claimedGrantId,
+          idempotencyKey: `grant-exec:${userId}:${input.previewId}`,
+          reason: "not_dispatched",
+        });
+        // The settled key is retired: retries require a fresh persisted
+        // preview and reservation; the cancelled attempt is never reopened.
+        await dependencies.conversations.clearPendingTransfer(
+          userId,
+          conversationId,
+        );
+      } else if (input.authorizedBy !== "delegated_grant") {
+        // Keep legacy explicit-user behavior independent of grant policy.
+        await dependencies.conversations.releasePendingTransferClaim(
+          userId,
+          conversationId,
+        );
+      }
       const result = errorResult(errorFromCode("wallet_unavailable"));
       const failed = await setProgress(
         (await dependencies.conversations.get(userId, conversationId)) ??

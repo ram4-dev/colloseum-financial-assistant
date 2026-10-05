@@ -261,6 +261,7 @@ Postgres :55501, DATABASE_URL env only; real `DelegatedGrantService`, real
 `conversation_transfer_attempts` rows — atomicity is NOT mock-tested).
 
 ### RED evidence (vitest --reporter=verbose, /tmp/phase8-red-v7.log preserved
+
 as `.agent-workflow/tasks/slice3-grant-execution/phase8-red-vitest.log`)
 
 Result: **1 file, 11 tests, 11 failed — ALL feature-level** (assertions by
@@ -271,6 +272,7 @@ index; documented early-return RED guards on missing APIs so no TypeError
 masks the assertion).
 
 Grouped failure causes (each RED by missing behavior):
+
 1. **Schema missing (migration 012):** 8.1 — `expected ['id','grant_id',…] to
    include 'released_at'` (columns absent; `released` audit CHECK absent;
    RLS/UPDATE-grant assertions pending the migration).
@@ -438,3 +440,74 @@ already-`cancelled`, ambiguous ownership, or lost CAS retains, and no
 - The solana-devnet `previewId` fail-closed guard restoration (HIGH PR #3) is
   planned in this amendment as Phase 8.7 (AD-11); its implementation also
   awaits RED evidence, in the same bounded batch or a separate one.
+
+## Phase 8 GREEN + AD-11 guard (2026-10-05, implementation complete)
+
+### Implementation (after recorded RED evidence)
+
+- Migration `012_grant_claim_release.sql` + Supabase mirror
+  `20260901001100_grant_claim_release.sql`: released_at/released_reason, `released`
+  audit CHECK, UPDATE grant — applied to :55501 (8.1 green).
+- Ledger `DelegatedGrantService`: tx-only `releaseReservationInTransaction`
+  (single release-semantics implementation; failAfter:'ledger' hook INSIDE it,
+  after the exact-row UPDATE and BEFORE the audit INSERT);
+  `settleGrantReservation` = ONE `withUserTransaction` + per-grant advisory
+  lock: exact-owner CAS `broadcasting→cancelled` (id+conversation+user+status+
+  claim_id) → tx-only release → audit; `failAfter:'audit'` after return; lost
+  CAS/absent/already-cancelled ⇒ bare return (retain, no release, no mutation).
+- Replay fail-closed: a RELEASED key returns `consumed:false, replay:false,
+  reason:'reservation_released'` (audited) — never `consumed:true`.
+- Window sums REWRITTEN to unreleased `grant_claim_ledger` rows in BOTH paths
+  (claim total + module `consumedInWindow`).
+- Repository seam: `PendingTransferClaim` (types.ts) `claimed` variant carries
+  `claimId`; `PostgresConversationRepository.claimPendingTransfer` UPDATE
+  RETURNING includes the minted `claim_id`. session-state in-memory variant
+  unchanged (no DB token there).
+- Service wiring: `runFinancialTransfer` gains `claimId/claimedGrantId/
+  authorizedBy`; settlement invoked ONLY when
+  `authorizedBy==='delegated_grant'` AND claimId AND claimedGrantId AND
+  `grantLedger.settle` exist — identity key `grant-exec:{userId}:{previewId}`,
+  no empty-identity fallback (fail closed, retain). Replaces the legacy
+  broadcasting→previewed reset on BOTH branches (preflight rejection with
+  reason `policy_rejected`/`recipient_revalidation_required`; provider
+  `not_dispatched` with reason `not_dispatched`), then `clearPendingTransfer`
+  (retry requires a FRESH persisted preview; the cancelled attempt is never
+  re-opened). `releasePendingTransferClaim` is PRESERVED only for the
+  explicit-user retry path (`authorizedBy !== 'delegated_grant'`), per Ramiro's
+  preserved-behavior instruction. `src/server.ts` wires `grantLedger.settle →
+  grants.settleGrantReservation`.
+- AD-11 (8.7): Solana provider `broadcastTransfer` fails closed on
+  missing/empty/whitespace `previewId` with `not_dispatched` BEFORE
+  `requireRecentBlockhash` and BEFORE `signAndSend`; no `sol-${now()}` fallback;
+  valid `previewId` used verbatim as the dispatch reference.
+
+### GREEN evidence (real Postgres :55501; DATABASE_URL required)
+
+| Suite | Result |
+| --- | --- |
+| `grant-claim-release.test.ts` (11: schema, tx-only release, replay fail-closed, real-repo claimId, 3-boundary rollback w/ DB re-read, exact-owner CAS, stale claim_id retention, absent/cancelled retention, service preflight + not_dispatched settle, window sums) | 11/11 |
+| `delegated-grants-consumption.test.ts` (fixtures updated to AD-10 semantics: real held reservations; window sum proven bidirectional — release stops counting; concurrent cap seeded from a real 4M held reservation) | 14/14 |
+| `solana-devnet-provider.test.ts` (AD-11 RED→GREEN: 3-case fail-closed before both seams; verbatim reference) | 11/11 |
+| E2E `grant-gate-entries.e2e.test.ts` + `grant-gate-model-origin.e2e.test.ts` | 3/3 |
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run build` | exit 0 |
+| `npm run lint` (src+tests, --max-warnings=0) | exit 0 |
+| `git diff --check` | exit 0 |
+
+Notes: two `delegated-grants-consumption` failures surfaced by the full-suite
+run were fixtures reading the OLD audit-row window sums — fixed to seed real
+ledger reservations (that was the point of the AD-10 change). `settleGrantReservation`
+failAfter is TEST-ONLY. `eval-fixtures.ts` claimId placeholder + unused-import
+removal compile the shared contract; two remaining unused-param lints there are
+pre-existing at HEAD.
+
+Full-suite follow-up after those fixture fixes: `npm test` completed with 842
+passed, 29 failed, 10 skipped (130 files: 116 passed, 10 failed, 4 skipped).
+The failures include unrelated database-backed contact/conversation/user tests
+timing out at their configured 5s/60s limits and the demo sentinel failing
+because `DEMO_USER_ID` is unset. All Slice 3 grant consumption/settlement and
+provider suites, plus the covered-path grant-gate E2E fixtures, pass separately
+as recorded above; the full suite remains a CI/environment blocker to report.
