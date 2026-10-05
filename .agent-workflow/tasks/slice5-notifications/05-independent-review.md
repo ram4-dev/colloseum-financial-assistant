@@ -1,6 +1,6 @@
 # Independent outline review — Slice 5
 
-Status: review 1 complete; findings resolved on the primary branch; final independent check pending.
+Status: PASS; review 1 findings resolved and corrected SDD independently checked.
 
 ## Review 1 — Pi / GLM 5.3, 2026-10-05
 
@@ -26,6 +26,13 @@ Status: review 1 complete; findings resolved on the primary branch; final indepe
 > F6 — INFORMATIONAL: original changed-line estimate undercounted tests. Updated estimate: 650–900 lines under the authorized one-PR-per-slice exception.
 >
 > `not_dispatched` returns the attempt to `previewed`; keep it notification-free and preserve the conversation error. The outline was not ready until F1/F3 and related design choices were resolved.
+
+## Review 2 — Pi / GLM 5.3, 2026-10-05
+
+- Re-read corrected SDD at `808f0da` and checked prior findings, `not_dispatched`, and size budgets; read-only.
+- Session: Herdr workspace `w5`, tab `w5:t2S`, pane `w5:p4R`, agent `slice5-outline-final-review`; resumed Pi with `nan/glm5.3-flash`, reasoning `high`.
+- Verdict: PASS; F1–F6 resolved, no content blocker, ready for the authorized Strict-TDD apply. Counts: proposal 432/450, design 649/800, ingestion spec 579/650, notifications spec 384/650, tasks 429/530.
+- Pi noted the gate-status record was stale during its pass. That metadata was corrected in the next commit; it does not change reviewed SDD content.
 
 Review focus:
 
