@@ -93,4 +93,27 @@ notes: >
   settlement/claim_id CAS acceptance set. No implementation yet: all Phase 8
   work is RED-first and
   unimplemented.
+  PHASE 8 GREEN (2026-10-05, commit 4fe4cf2): migration 012 + Supabase
+  20260901001100 applied; tx-only releaseReservationInTransaction; released
+  key replay fails closed; BOTH window sums rewritten to unreleased
+  grant_claim_ledger rows; atomic settleGrantReservation (one
+  withUserTransaction, per-grant advisory lock, exact-owner CAS
+  broadcasting->cancelled by id+status+claim_id, ledger release, released
+  audit, all-or-nothing rollback proven by injected failures at all three
+  effect boundaries with DB re-reads); claimPendingTransfer winner returns
+  persisted claimId (repository contract + PG RETURNING); service settle
+  wiring replaces the legacy broadcasting->previewed reset on preflight
+  rejection and not_dispatched only (delegated-grant identity required,
+  fail closed otherwise; uncertain/submitted retain); clearPendingTransfer
+  after not_dispatched settle so retries need a fresh preview; server.ts
+  wires settle. Solana provider fail-closed previewId guard restored
+  (AD-11/HIGH PR #3) with RED-first unit tests (14/14). Focused suites:
+  grant-claim-release 11/11, delegated grants 28/28, unit 84 files 659
+  passed, E2E grant-gate 3/3, lint/typecheck/build clean. Full integration
+  190 passed; the 10 failures are the documented baseline
+  (api-contacts/contacts-cross-user timeouts, users-db sentinel missing
+  DEMO_USER_ID, api-conversation-service/api-conversations/api-me/
+  api-voice-auth fail only in the full parallel run and pass isolated) —
+  none touch the grant/release paths. Tasks 7.2/7.3 recorded; all Phase 8
+  tasks complete.
 ---

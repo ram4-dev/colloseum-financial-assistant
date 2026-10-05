@@ -511,3 +511,55 @@ timing out at their configured 5s/60s limits and the demo sentinel failing
 because `DEMO_USER_ID` is unset. All Slice 3 grant consumption/settlement and
 provider suites, plus the covered-path grant-gate E2E fixtures, pass separately
 as recorded above; the full suite remains a CI/environment blocker to report.
+
+## Phase 8 GREEN — reservation release implemented (2026-10-05, commit 4fe4cf2)
+
+### Implementation (all on top of the RED suite, which was NOT weakened)
+
+- `src/db/migrations/012_grant_claim_release.sql` + Supabase
+  `20260901001100_grant_claim_release.sql`: additive `released_at`/
+  `released_reason`, `released` audit event, UPDATE grant to `recipient_app`
+  (applied to :55501; already present from the RED-phase dev run).
+- `src/wallet/grants/consumption.ts`: tx-only
+  `releaseReservationInTransaction` (no nested tx; idempotent double-release
+  no-op preserving original timestamp/reason; one compensating `released`
+  audit row per actual release); `claimConsumption` replay branch fails closed
+  for released keys (never consumed/replay-flagged, audited
+  `reservation_released`); BOTH window sums (claim cap total +
+  `consumedInWindow`) rewritten to UNRELEASED `grant_claim_ledger` rows.
+- `settleGrantReservation`: ONE `withUserTransaction` + per-grant advisory
+  lock: exact-owner attempt CAS `broadcasting → cancelled` (id + conversation
+  - user + status + claim_id), then ledger release + `released` audit on the
+  SAME client; lost CAS ⇒ plain return (retain); missing releasable row ⇒
+  invariant throw (rollback); test-only `failAfter` at all three effect
+  boundaries proves all-or-nothing rollback by DB re-read.
+- `src/conversations/postgres-repository.ts`: winner `claimPendingTransfer`
+  RETURNING includes the minted `claim_id`; `PendingTransferClaim` (types.ts)
+  carries it. session-state in-memory type unchanged (no fake token).
+- `src/conversations/service.ts`: `runFinancialTransfer` takes
+  `claimId`/`claimedGrantId`/`authorizedBy`; settlement invoked ONLY when
+  `authorizedBy === 'delegated_grant'` with complete identity (fail closed,
+  retain otherwise — never empty-identity release) on preflight
+  policy/recipient rejection (reason `policy_rejected`/
+  `recipient_revalidation_required`) and `not_dispatched`; both legacy
+  `releasePendingTransferClaim` calls in those branches REMOVED; uncertain/
+  submitted untouched; `clearPendingTransfer` after not_dispatched settle
+  (released key retired, retry needs fresh preview). Winner claimId threaded
+  at both call sites (async + synchronous).
+- `src/server.ts`: `grantLedger.settle` wired to `grants.settleGrantReservation`.
+- `src/wallet/solana-devnet-provider.ts`: AD-11 fail-closed `previewId` guard
+  restored before RPC/signer, no fallback reference (HIGH PR #3).
+
+### GREEN evidence
+
+| Check | Result |
+| --- | --- |
+| grant-claim-release.test.ts (real PG :55501) | **11/11 passed** |
+| delegated-grant DB suites (execution/consumption/candidates) | 28/28 |
+| Unit suite (84 files) | 659 passed / 1 skipped |
+| E2E grant-gate (entries + model-origin) | 3/3 |
+| Solana provider guard tests | 14/14 |
+| `npm run lint` / `typecheck` / `build` | clean |
+| Full integration | 190 passed; 10 failures = documented baseline (api-contacts & contacts-cross-user timeouts, users-db sentinel missing DEMO_USER_ID, api-conversation-service/conversations/me/voice-auth fail only in the full parallel run and pass isolated) — none touch grant/release paths |
+
+Phase 8 tasks 8.1–8.8 complete. Remaining: Phase 7.2 final PR update/review.
