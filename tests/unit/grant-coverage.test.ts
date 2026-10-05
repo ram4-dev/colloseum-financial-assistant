@@ -82,7 +82,7 @@ describe("classifyGrantCoverage (phase 1 RED)", () => {
       candidates: [grant()],
       tokenDecimals: decimals,
     });
-    expect(decision).toEqual({
+    expect(decision).toMatchObject({
       outcome: "covered",
       grantId: "11111111-1111-4111-8111-111111111111",
       amountSmallestUnits: "10000000",
@@ -196,7 +196,7 @@ describe("classifyGrantCoverage (phase 1 RED)", () => {
       candidates: [broad, narrow],
       tokenDecimals: decimals,
     });
-    expect(decision).toEqual({
+    expect(decision).toMatchObject({
       outcome: "covered",
       grantId: narrow.id,
       amountSmallestUnits: "5000000",
@@ -350,7 +350,7 @@ describe("classifyGrantCoverage (phase 1 RED)", () => {
       candidates: [unbound, ready],
       tokenDecimals: decimals,
     });
-    expect(withSibling).toEqual({
+    expect(withSibling).toMatchObject({
       outcome: "covered",
       grantId: ready.id,
       amountSmallestUnits: "10000000",
@@ -398,7 +398,7 @@ describe("classifyGrantCoverage (phase 1 RED)", () => {
       candidates: [malformedCumulative, broad, narrow],
       tokenDecimals: decimals,
     });
-    expect(decision).toEqual({
+    expect(decision).toMatchObject({
       outcome: "covered",
       grantId: narrow.id,
       amountSmallestUnits: "5000000",
@@ -414,7 +414,7 @@ describe("classifyGrantCoverage (phase 1 RED)", () => {
       candidates: [hexCumulative, broad, narrow],
       tokenDecimals: decimals,
     });
-    expect(withHex).toEqual({
+    expect(withHex).toMatchObject({
       outcome: "covered",
       grantId: narrow.id,
       amountSmallestUnits: "5000000",

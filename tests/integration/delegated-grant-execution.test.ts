@@ -40,9 +40,7 @@ const conversationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 // conversation all belong to the SAME resolved user id.
 let userId = "";
 
-function repositoryWithSpy(
-  predeterminedAttemptId?: string,
-): {
+function repositoryWithSpy(predeterminedAttemptId?: string): {
   repository: ConversationRepositoryLike;
   events: string[];
 } {
@@ -120,14 +118,14 @@ function repositoryWithSpy(
       const id = randomUUID();
       attempts.push({ id, status: "previewed" });
       events.push(`attempt:previewed:${id}`);
-          snapshot = {
-            ...snapshot,
-            pendingTransfer: {
-              ...(transfer as object),
-              previewId: id,
-            } as ConversationSnapshot["pendingTransfer"],
-            revision: snapshot.revision + 1,
-          };
+      snapshot = {
+        ...snapshot,
+        pendingTransfer: {
+          ...(transfer as object),
+          previewId: id,
+        } as ConversationSnapshot["pendingTransfer"],
+        revision: snapshot.revision + 1,
+      };
       return snapshot;
     },
     async clearPendingTransfer() {

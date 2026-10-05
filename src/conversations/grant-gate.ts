@@ -44,6 +44,11 @@ export type GrantGateDecision = {
   grantId?: string;
   /** Exact smallest-unit amount (AD-6 claim input). Required when covered. */
   amountSmallestUnits?: string;
+  /**
+   * ALL statically eligible candidates in Q3 order (AD-4/AD-6): the service
+   * claims them sequentially; each rejection falls back to the next.
+   */
+  orderedCandidates?: Array<{ grantId: string; amountSmallestUnits: string }>;
 } | null;
 
 export type GrantGateDependencies = {
@@ -156,6 +161,8 @@ export function createGrantGate(dependencies: GrantGateDependencies): {
           grantId: decision.grantId,
           // Exact smallest-unit amount for the atomic ledger claim.
           amountSmallestUnits: decision.amountSmallestUnits,
+          // All statically eligible candidates, Q3 order (AD-4/AD-6).
+          orderedCandidates: decision.orderedCandidates,
         };
       } catch {
         // Fail closed: ledger/provider/parsing failures degrade to the

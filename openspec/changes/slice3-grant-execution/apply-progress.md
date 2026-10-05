@@ -164,3 +164,38 @@ attempt:broadcasting < submitted); real rejected claim (unbound grant ⇒
 
 4.4 remainder: ordered candidate fallback + audited degradation; then Phase 5
 (typed/voice parity + E2E).
+
+## Phase 4.4 — Ordered candidate fallback (completed 2026-10-05)
+
+### Implementation (design AD-4/AD-6/AD-8 binding)
+
+- `src/conversations/grant-coverage.ts`: `CoverageDecision.covered` now carries
+  `orderedCandidates` — ALL statically eligible candidates in Q3 order
+  (per-transfer cap → cumulative cap → expiry → stable id), computed from the
+  sorted valid candidate list. Unit suite 26/26 (covered assertions now
+  `toMatchObject`; malformed-cumulative and policy-less-sibling cases updated
+  for the new shape).
+- `src/conversations/grant-gate.ts`: `GrantGateDecision.orderedCandidates`
+  propagated from the classifier result.
+- `src/conversations/service.ts`: sequential claim loop over
+  `orderedCandidates` — same key `grant-exec:{userId}:{attemptId}` per
+  candidate; first `consumed: true` wins and proceeds to the attempt gate;
+  each rejection (revoked/expired/window/budget) falls back to the next and is
+  audited by the ledger; a ledger error or exhausted list degrades closed with
+  no attempt claim and no broadcast. `used` rows exist only for the winning
+  claim. Explicit user-confirm path unchanged.
+
+### Evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Classifier unit | `vitest run tests/unit/grant-coverage.test.ts` | 26/26 |
+| Claim ordering (real DB :55501) | `vitest run tests/integration/delegated-grant-execution.test.ts` | 3/3 |
+| Candidate fallback (real DB :55501) | `vitest run tests/integration/delegated-grant-candidates.test.ts` | 2/2 (service iterates: narrow rejected+audited → fallback consumed → single broadcast; all-rejected ⇒ no broadcasting, confirmation_required, both rejections audited) |
+| Typecheck / lint | `npm run typecheck` / `npm run lint` | clean |
+
+Harness notes (test-only, production Q1 rule untouched): test classifier `now`
+pinned +5s to absorb Postgres/process clock skew on `createdAt`; gate stub
+delivers real `classifyGrantCoverage` output so the service iteration runs
+against the real ledger; pre-claim exhausts the narrow grant's budget before
+the flow. Diagnostic console.logs removed.
