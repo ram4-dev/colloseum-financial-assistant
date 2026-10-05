@@ -7,7 +7,7 @@ Add a PostgreSQL inbox and shared ingestion for assistant transfers, signed webh
 ## Architecture Decisions
 
 | Decision | Choice | Tradeoff |
-|---|---|---|
+| --- | --- | --- |
 | Source / delivery | PostgreSQL feed; HTTP reads, LiveKit invalidates | Process events are transient; native push excluded |
 | Ingestion | Shared normalizer and DB dedupe | Avoids divergent webhook/poll semantics |
 | Verification | Raw-byte signature check before parsing | Parsed-body verification changes signed bytes |
@@ -17,7 +17,14 @@ Add a PostgreSQL inbox and shared ingestion for assistant transfers, signed webh
 | RLS | Owner-only feed; separate worker policies | Same owner policy blocks global workers |
 | Send failure | Skip retryable `not_dispatched`; notify `uncertain` | No dispatch vs. possibly moved funds |
 
-Per-table RLS details and the 30-second feed interval / 300-second Svix timestamp window are in `03-design-discussion.md`.
+Per-table RLS details and the 30-second feed interval / 300-second Svix timestamp window are fixed below and in the design decisions table above.
+
+### RLS surface (implemented in migration 013)
+
+- `wallet_notifications`: owner-only (`app.user_id = user_id`); system (anonymous) context matches no row.
+- `provider_webhook_receipts`, `reconciliation_cursors`, `reconciliation_leases`: system-context-only — access only while `app.user_id` is unset/empty; every user context is denied.
+- `assistant_lifecycle_outbox`: dual policy — the resolved owner's transaction writes attempt-transition events; the anonymous dispatcher enumerates and completes pending events.
+- `user_wallets` (additive to migration 006): a `FOR SELECT` policy allows anonymous system transactions to resolve enrolled Privy wallet identity fields for exact webhook account/address binding and reconciliation. Ordinary owner-scoped policy is unchanged: no user-context cross-owner reads or writes.
 
 ## Data Flow
 
@@ -47,7 +54,7 @@ Advance cursors only after events are durable. Dedupe chain events by network/wa
 ## File Changes
 
 | File | Action | Description |
-|---|---|---|
+| --- | --- | --- |
 | `src/db/migrations/013_wallet_notifications.sql` | Create | Feed/outbox/receipt/cursor tables, RLS |
 | `src/notifications/*`, `src/api/notifications.ts` | Create | Normalize, ingest, reconcile, feed/read routes |
 | `src/api/provider-webhooks.ts`, `src/server.ts` | Modify | Raw-body ingress and lifecycle wiring |
@@ -64,7 +71,7 @@ Advance cursors only after events are durable. Dedupe chain events by network/wa
 ## Testing Strategy
 
 | Layer | What to Test | Approach |
-|---|---|---|
+| --- | --- | --- |
 | Unit | Signatures, normalization, dedupe, projection, cursors | Vitest RED tests |
 | Integration | RLS, wallet resolution, replay/race, cursor retry, outbox recovery | PostgreSQL, two users, fake sources |
 | E2E | Transfer/inbound feed without reload; voice refresh | Browser + fake provider; no funds |

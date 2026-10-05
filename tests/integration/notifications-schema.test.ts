@@ -36,11 +36,12 @@ suite(
     async function provisionWallet(
       userId: string,
       address: string,
+      providerWalletId = `fixture-${randomUUID()}`,
     ): Promise<string> {
       const result = await database.query<{ id: string }>(
         `INSERT INTO user_wallets (user_id, provider, provider_wallet_id, chain_family, address, state)
-       VALUES ($1, 'fixture', $2, 'solana', $3, 'ready') RETURNING id`,
-        [userId, `fixture-${randomUUID()}`, address],
+       VALUES ($1, 'privy', $2, 'solana', $3, 'ready') RETURNING id`,
+        [userId, providerWalletId, address],
       );
       return result.rows[0]!.id;
     }
@@ -52,22 +53,22 @@ suite(
       values: { userId: string; dedupeKey: string; status: string },
     ): Promise<{ id: string }[]> {
       const result = await client.query<{ id: string }>(
-        `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, projection)
-       VALUES ($1, 'assistant_transfer', $3, $2, '{}') RETURNING id`,
+        `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, title, projection)
+       VALUES ($1, 'assistant_transfer', $3, $2, 'Transferencia', '{}') RETURNING id`,
         [values.userId, values.dedupeKey, values.status],
       );
       return result.rows;
     }
 
     it("creates wallet_notifications with (user_id, dedupe_key) unique and safe projection", async () => {
-      const indexes = await database.query<{ indexname: string }>(
-        `SELECT indexname FROM pg_indexes WHERE tablename = 'wallet_notifications'`,
+      const indexes = await database.query<{ indexdef: string }>(
+        `SELECT indexdef FROM pg_indexes WHERE tablename = 'wallet_notifications'`,
       );
       expect(
         indexes.rows.some(
           (row) =>
-            row.indexname.includes("user_id") &&
-            row.indexname.includes("dedupe"),
+            row.indexdef.includes("(user_id, dedupe_key)") &&
+            row.indexdef.includes("UNIQUE"),
         ),
       ).toBe(true);
 
@@ -202,6 +203,103 @@ suite(
       expect(mutatedBySystem).toHaveLength(0);
     });
 
+    it("allows system context to write/read system tables and the owner to write its outbox", async () => {
+      const userA = await provisionUser();
+      const attemptId = randomUUID();
+
+      // System context (anonymous) reads and writes receipts/cursors while
+      // a user transaction with the same rights is policy-blocked.
+      await database.withUserTransactionAnonymous(async (client) => {
+        const receipt = await client.query<{ id: string }>(
+          `INSERT INTO provider_webhook_receipts (provider, account_id, delivery_id)
+               VALUES ('privy', 'acct-outbox-red', $1) RETURNING id`,
+          [`delivery-outbox-${randomUUID()}`],
+        );
+        expect(receipt.rows).toHaveLength(1);
+        const readBack = await client.query<{ id: string }>(
+          `SELECT id FROM provider_webhook_receipts WHERE account_id = 'acct-outbox-red'`,
+        );
+        expect(readBack.rows.length).toBeGreaterThanOrEqual(1);
+      });
+
+      await database.withUserTransactionAnonymous(async (client) => {
+        const cursor = await client.query<{ id: string }>(
+          `INSERT INTO reconciliation_cursors (wallet_id, network, cursor_value)
+               VALUES (gen_random_uuid(), 'solana-devnet', 'slot-system-red') RETURNING id`,
+        );
+        expect(cursor.rows).toHaveLength(1);
+      });
+
+      // The resolved owner writes its own outbox event in a user
+      // transaction (attempt transition path).
+      await database.withUserTransaction(userA, async (client) => {
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO assistant_lifecycle_outbox (attempt_id, user_id, status, dedupe_key)
+               VALUES ($1, $2, 'confirmed', $3) RETURNING id`,
+          [attemptId, userA, `assistant-transfer:${attemptId}:confirmed`],
+        );
+        expect(inserted.rows).toHaveLength(1);
+      });
+
+      // The anonymous dispatcher reads the pending event and completes it
+      // (system worker path).
+      await database.withUserTransactionAnonymous(async (client) => {
+        const pending = await client.query<{ attempt_id: string }>(
+          `SELECT attempt_id FROM assistant_lifecycle_outbox
+               WHERE attempt_id = $1 AND processed_at IS NULL`,
+          [attemptId],
+        );
+        expect(pending.rows).toHaveLength(1);
+        const completed = await client.query<{ id: string }>(
+          `UPDATE assistant_lifecycle_outbox SET processed_at = now()
+               WHERE attempt_id = $1 AND processed_at IS NULL RETURNING id`,
+          [attemptId],
+        );
+        expect(completed.rows).toHaveLength(1);
+      });
+
+      // User B must not see A's outbox rows (owner-scoped policy).
+      const userB = await provisionUser();
+      const visibleToB = await database.withUserTransaction(userB, (client) =>
+        client.query<{ id: string }>(
+          `SELECT id FROM assistant_lifecycle_outbox WHERE user_id = $1`,
+          [userA],
+        ),
+      );
+      expect(visibleToB.rows).toHaveLength(0);
+    });
+
+    it("lets system context resolve enrolled wallets while a user context cannot", async () => {
+      const userA = await provisionUser();
+      const userB = await provisionUser();
+      const accountId = `acct-lookup-${randomUUID()}`;
+      const address = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+      await provisionWallet(userA, address, accountId);
+
+      // System context (webhook identity lookup) sees the enrollment.
+      const systemLookup = await database.withUserTransactionAnonymous(
+        (client) =>
+          client.query<{ id: string; user_id: string; address: string }>(
+            `SELECT id, user_id, address FROM user_wallets
+                 WHERE provider_wallet_id = $1 AND provider = 'privy' AND state = 'ready'`,
+            [accountId],
+          ),
+      );
+      expect(systemLookup.rows).toHaveLength(1);
+      expect(systemLookup.rows[0]!.user_id).toBe(userA);
+      expect(systemLookup.rows[0]!.address).toBe(address);
+
+      // User B has no visibility into A's enrollment through user context.
+      const userLookup = await database.withUserTransaction(userB, (client) =>
+        client.query<{ id: string }>(
+          `SELECT id FROM user_wallets
+               WHERE provider_wallet_id = $1 AND provider = 'privy' AND state = 'ready'`,
+          [accountId],
+        ),
+      );
+      expect(userLookup.rows).toHaveLength(0);
+    });
+
     it("keeps webhook receipts and reconciliation cursors system-context-only", async () => {
       const userA = await provisionUser();
       // Anonymous service transaction (system context) may write receipts.
@@ -306,8 +404,8 @@ suite(
       // Recovery: notification insert + outbox completion commit atomically.
       await database.withUserTransaction(userA, async (client) => {
         await client.query(
-          `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, projection)
-         VALUES ($1, 'assistant_transfer', 'confirmed', $2, '{}')`,
+          `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, title, projection)
+         VALUES ($1, 'assistant_transfer', 'confirmed', $2, 'Transferencia', '{}')`,
           [userA, dedupeKey],
         );
         await client.query(
@@ -330,8 +428,8 @@ suite(
       await expect(
         database.withUserTransaction(userA, async (client) => {
           await client.query(
-            `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, projection)
-           VALUES ($1, 'assistant_transfer', 'confirmed', $2, '{}')`,
+            `INSERT INTO wallet_notifications (user_id, category, status, dedupe_key, title, projection)
+           VALUES ($1, 'assistant_transfer', 'confirmed', $2, 'Transferencia', '{}')`,
             [userA, dedupeKey],
           );
         }),

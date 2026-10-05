@@ -58,6 +58,11 @@ import {
   type PrivyWalletApiClient,
 } from "./wallet/privy-client.js";
 import { registerWalletsRoutes } from "./api/wallets.js";
+import { registerProviderWebhookRoutes } from "./api/provider-webhooks.js";
+import { registerNotificationsFeedRoutes } from "./api/notifications.js";
+import { randomUUID } from "node:crypto";
+import { createDefaultSolanaDevnetReconciliationSource } from "./notifications/solana-reconciliation-source.js";
+import { startReconciliationWorker } from "./notifications/reconciliation-worker.js";
 import { registerGrantsRoutes } from "./api/grants.js";
 import { DelegatedGrantService } from "./wallet/grants/consumption.js";
 import { createGrantGate } from "./conversations/grant-gate.js";
@@ -264,6 +269,23 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
     // PMU-007: identity-only bootstrap.
     app.register(registerMeRoutes, { resolveUserId, database });
 
+    // Slice 5: authenticated notifications feed/read surface.
+    app.register(registerNotificationsFeedRoutes, {
+      resolveUserId,
+      database,
+    });
+
+    // Slice 5: signed provider webhook ingress. Raw-byte Svix verification
+    // is only reachable when the signing secret is configured; without it
+    // the route is intentionally absent (fail closed, no unverified path).
+    const providerWebhookSecret = process.env.PRIVY_WEBHOOK_SECRET?.trim();
+    if (database && providerWebhookSecret) {
+      app.register(registerProviderWebhookRoutes, {
+        database,
+        webhookSecret: providerWebhookSecret,
+      });
+    }
+
     // PMU-008..013: user-scoped contacts CRUD.
     app.register(registerContactsRoutes, {
       resolveUserId,
@@ -282,6 +304,33 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
       void contactsEmbedder.prefetch().catch(() => {
         // Prefetch is an optimization; the first create loads on demand.
       });
+    });
+
+    // Slice 5: durable reconciliation worker (bounded devnet polling).
+    // Gated so tests (any truthy VITEST) and non-polling deployments
+    // never hit live RPC. Started inside onReady — never at build time —
+    // and stopped, awaiting in-flight work, in onClose.
+    const reconciliationEnabled =
+      database &&
+      process.env.NOTIFICATIONS_RECONCILIATION_ENABLED === "true" &&
+      !process.env.VITEST;
+    let reconciliationWorker: ReturnType<
+      typeof startReconciliationWorker
+    > | null = null;
+    app.addHook("onReady", async () => {
+      if (!reconciliationEnabled) return;
+      reconciliationWorker = startReconciliationWorker({
+        database: database!,
+        source: createDefaultSolanaDevnetReconciliationSource(),
+        workerId: `server-${randomUUID()}`,
+        pageSize: 100,
+        leaseSeconds: 300,
+        intervalMs: 30_000,
+        backoffOptions: { baseSeconds: 5, maxSeconds: 300 },
+      });
+    });
+    app.addHook("onClose", async () => {
+      await reconciliationWorker?.stop();
     });
 
     // PEW-001..014: user-scoped embedded wallet surface. The fixture Privy

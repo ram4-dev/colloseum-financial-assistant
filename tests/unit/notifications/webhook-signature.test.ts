@@ -67,7 +67,14 @@ describe("provider webhook signature verification (raw bytes)", () => {
   });
 
   it("rejects a signature made with a different secret", () => {
-    const request = rawRequest({ secret: `whsec_${ATTACKER_BYTES_BASE64}` });
+    // The signature is forged with an attacker-controlled key while the
+    // verifier holds the legitimate signing secret: HMAC keys differ.
+    const attackerSecret = `whsec_${ATTACKER_BYTES_BASE64}`;
+    const forged = sign(
+      `msg_01HVQKSPFJ8Z0XAMPLE000000.1700000000.${JSON.stringify({ type: "wallet.transaction.confirmed" })}`,
+      attackerSecret,
+    );
+    const request = rawRequest({ secret: SECRET, signature: forged });
     const result = verifyProviderWebhook(request);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("invalid_signature");

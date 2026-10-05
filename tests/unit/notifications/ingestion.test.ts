@@ -14,6 +14,7 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
     dedupeKey: "assistant-transfer:attempt-1:confirmed",
     category: "assistant_transfer",
     status: "confirmed",
+    title: "Transferencia confirmada",
     projection: { status: "confirmed", amountLabel: "10 USDT" },
     ...overrides,
   };
@@ -25,7 +26,7 @@ function dependencies(
   publishInvalidation: ReturnType<typeof vi.fn>;
 } {
   const insertNotification = vi.fn(async () => ({ inserted: true }));
-  const publishInvalidation = vi.fn(async () => undefined);
+  const publishInvalidation = vi.fn(async (): Promise<void> => undefined);
   return { insertNotification, publishInvalidation, ...overrides };
 }
 

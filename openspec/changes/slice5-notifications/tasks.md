@@ -31,10 +31,10 @@ Chain strategy: size-exception
 
 ## Phase 2: Durable backend
 
-- [ ] 2.1 Create additive migration for notifications, assistant lifecycle outbox, webhook receipts, reconciliation cursors/leases, indexes, grants, and table-specific RLS.
-- [ ] 2.2 Add idempotent owner-scoped ingestion and safe display projection.
-- [ ] 2.3 Add authenticated feed/read API, raw-body signature verifier, scoped receipt dedupe.
-- [ ] 2.4 Add bounded Solana pages, overlap-safe cursors, worker lease, backoff, startup and shutdown.
+- [x] 2.1 Create additive migration for notifications, assistant lifecycle outbox, webhook receipts, reconciliation cursors/leases, indexes, grants, and table-specific RLS.
+- [x] 2.2 Add idempotent owner-scoped ingestion and safe display projection.
+- [x] 2.3 Add authenticated feed/read API, raw-body signature verifier, scoped receipt dedupe.
+- [x] 2.4 Add bounded Solana pages, overlap-safe cursors, worker lease, backoff, startup and shutdown.
 - [ ] 2.5 Atomically outbox `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid` attempt states; skip retryable `not_dispatched`.
 - [ ] 2.6 Retry outbox through canonical ingestion; atomically insert notification/complete event; fan out only after winning insert. Keep `wallet_operations` separate.
 
