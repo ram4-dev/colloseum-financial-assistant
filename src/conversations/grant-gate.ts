@@ -30,6 +30,8 @@ export type GrantGateInput = {
   conversationId: string;
   text: string;
   language: string;
+  /** Server-captured request timestamp (handleTurnStream entry, epoch ms). */
+  requestAt: number;
   pendingTransfer: {
     network: string;
     token: string;
@@ -54,8 +56,6 @@ export type GrantGateDecision = {
 export type GrantGateDependencies = {
   grants: DelegatedGrantService;
   walletForUser: WalletForUser;
-  /** Injected for deterministic tests; defaults to the system clock. */
-  clock?: { now(): number };
 };
 
 /** Solana devnet is the only registry network for delegated grants (Slice 2). */
@@ -71,7 +71,6 @@ function exactDecimalAmount(value: string): string | null {
 export function createGrantGate(dependencies: GrantGateDependencies): {
   evaluate(input: GrantGateInput): Promise<GrantGateDecision>;
 } {
-  const clock = dependencies.clock ?? { now: () => Date.now() };
   return {
     async evaluate(input: GrantGateInput): Promise<GrantGateDecision> {
       try {
@@ -133,7 +132,9 @@ export function createGrantGate(dependencies: GrantGateDependencies): {
             amount,
             recipient: input.pendingTransfer.recipient,
             walletId,
-            now: clock.now(),
+            // Request-time classification (AD-2/Q1): bound to the original
+            // turn, not to lookup completion.
+            now: input.requestAt,
             // This gate runs only on the original authenticated turn path
             // (the service enforces that); binding was proven above.
             intentBoundToOriginalText: true,

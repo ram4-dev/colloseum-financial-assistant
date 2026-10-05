@@ -263,12 +263,31 @@ describe("grant-covered conversation gate (phase 3 RED)", () => {
   });
 
   it("RED: a covered typed request resolves to sent without confirmation_required", async () => {
-    const grantGate = vi.fn(async () => ({ covered: true as const }));
+    const requestAt = Date.parse("2026-10-05T00:00:00.000Z");
+    let clockCalls = 0;
+    let gateRequestAt: number | undefined;
+    const grantGate = {
+      evaluate: async (input: { requestAt: number }) => {
+        gateRequestAt = input.requestAt;
+        return {
+          covered: true as const,
+          source: "delegated_grant" as const,
+          grantId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          amountSmallestUnits: "10000000",
+        };
+      },
+    };
     const conversations = repositoryFixture();
     const service = createWalletConversationService({
       conversations,
       wallet: new FixtureWalletProvider(),
-      grantGate: { evaluate: grantGate },
+      grantGate,
+      grantLedger: { claim: async () => ({ consumed: true }) },
+      // Later clock reads occur during narration after async turn work. The
+      // gate must keep the timestamp captured at handleTurnStream entry.
+      clock: {
+        now: () => (clockCalls++ === 0 ? requestAt : requestAt + 60_000),
+      },
     });
     const streamed = await events(service, {
       conversationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -281,11 +300,10 @@ describe("grant-covered conversation gate (phase 3 RED)", () => {
     const turn = (
       completed as { type: "turn-completed"; result: { status: string } }
     ).result;
-    expect(grantGate).toHaveBeenCalled();
+    expect(gateRequestAt).toBe(requestAt);
     expect(turn.status).toBe("sent");
     expect(turn.status).not.toBe("confirmation_required");
     // The classifier was consulted with a server-owned, user-request origin.
-    expect(grantGate).toHaveBeenCalled();
     const snapshot = await conversations.get(
       userId,
       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -296,12 +314,18 @@ describe("grant-covered conversation gate (phase 3 RED)", () => {
   });
 
   it("RED: covered turn with financial tasks resolves to the terminal sent result", async () => {
-    const grantGate = vi.fn(async () => ({ covered: true as const }));
+    const grantGate = vi.fn(async () => ({
+      covered: true as const,
+      source: "delegated_grant" as const,
+      grantId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      amountSmallestUnits: "10000000",
+    }));
     const registry = new FinancialTaskRegistry();
     const service = createWalletConversationService({
       conversations: repositoryFixture(),
       wallet: new FixtureWalletProvider(),
       grantGate: { evaluate: grantGate },
+      grantLedger: { claim: async () => ({ consumed: true }) },
       financialTasks: registry,
     });
     const streamed = await events(service, {

@@ -191,6 +191,8 @@ export type WalletConversationDependencies = {
       conversationId: string;
       text: string;
       language: string;
+      /** Server-captured request timestamp (epoch ms) from service entry. */
+      requestAt: number;
       pendingTransfer: {
         network: string;
         token: string;
@@ -203,6 +205,15 @@ export type WalletConversationDependencies = {
       grantId?: string;
       /** Exact smallest-unit amount (AD-6 claim input). Required when covered. */
       amountSmallestUnits?: string;
+      /**
+       * ALL statically eligible candidates in Q3 order (AD-4/AD-6): the
+       * service claims them sequentially; each rejection falls back to
+       * the next.
+       */
+      orderedCandidates?: Array<{
+        grantId: string;
+        amountSmallestUnits: string;
+      }>;
     } | null>;
   };
   /**
@@ -238,6 +249,7 @@ export function createWalletConversationService(
 
   async function* handleTurnStream(
     input: HandleTurnInput,
+    requestAt = clock.now(),
   ): AsyncIterable<ConversationEvent> {
     let snapshot = await dependencies.conversations.get(
       input.userId,
@@ -320,7 +332,7 @@ export function createWalletConversationService(
         );
         const acceptedText =
           interpretation.sourceText ?? renderInterpretation(interpretation);
-        yield* handleTurnStream({ ...input, text: acceptedText });
+        yield* handleTurnStream({ ...input, text: acceptedText }, requestAt);
         return;
       }
       await clearInterpretation(
@@ -468,6 +480,7 @@ export function createWalletConversationService(
             conversationId: input.conversationId,
             text: input.text,
             language: visible.language,
+            requestAt,
             pendingTransfer: {
               network: pending.preview.network,
               token: pending.preview.token,

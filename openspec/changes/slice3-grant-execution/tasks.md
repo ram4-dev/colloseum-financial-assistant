@@ -2,8 +2,8 @@
 
 Binding: `spec.md` (45 scenarios); AD-1..AD-9. Strict TDD: RED/GREEN/TRIANGULATE/REFACTOR.
 
-Estimated changed lines: 900–1,300. 400-line budget risk: High.
-Chained PRs recommended: No.
+Estimated changed lines: approximately 4,000 including SDD, implementation, and tests. 400-line budget risk: High.
+Chained PRs recommended: Yes; Slice 3 depends on the provider contract in Slice 2.
 Decision needed before apply: No
 Chain strategy: size-exception
 400-line budget risk: High
@@ -39,19 +39,19 @@ PR #3 stacks on `origin/slice2-provider-solana-devnet` until PR #2 merges. Herme
 
 ## Phase 5 — Typed/voice parity and E2E
 
-- [ ] 5.1 RED parity tests: same intent/ledger yields same typed/transcript decision; degraded preview supports confirm/cancel.
-- [ ] 5.2 RED tool tests: model-origin `send_token` remains preview-only; no grant or direct-broadcast tool exists.
-- [ ] 5.3 Mark LiveKit tool previews ineligible; keep realtime tool surface unchanged.
-- [ ] 5.4 Add fixture E2E for covered typed and voice requests plus degraded confirmation; no live credentials.
+- [x] 5.1 RED parity tests: same intent/ledger yields same typed/transcript decision; degraded preview supports confirm/cancel.
+- [x] 5.2 RED tool tests: model-origin `send_token` remains preview-only; no grant or direct-broadcast tool exists.
+- [x] 5.3 Mark LiveKit tool previews ineligible; keep realtime tool surface unchanged.
+- [x] 5.4 Add fixture E2E for covered typed and voice requests plus degraded confirmation; no live credentials.
 
 ## Phase 6 — Verification and scope
 
-- [ ] 6.1 Verify expiry-at-boundary, window/cap +1, and stable tie ordering.
-- [ ] 6.2 Run lint, typecheck, full DB-backed tests, and E2E; record outcomes.
-- [ ] 6.3 Confirm HTTP contract mirrors and diff contains no provider, LiveKit tool, or transfer-pipeline changes.
+- [x] 6.1 Verify expiry-at-boundary, window/cap +1, and stable tie ordering.
+- [x] 6.2 Run lint, typecheck, full DB-backed tests, and E2E; record outcomes.
+- [x] 6.3 Confirm HTTP contract mirrors and diff contains no provider, LiveKit tool, or transfer-pipeline changes.
 
 ## Phase 7 — Delivery gates
 
-- [ ] 7.1 Apply is authorized under Ramiro’s standing instruction; no approval pause.
+- [x] 7.1 Apply is authorized under Ramiro’s standing instruction; no approval pause.
 - [ ] 7.2 Push the slice branch and open one stacked PR; obtain Hermes test and bounded review.
 - [ ] 7.3 Record post-apply verification and delivery status in `state.yaml`.

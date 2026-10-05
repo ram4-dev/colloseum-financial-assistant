@@ -63,8 +63,7 @@ function fixtures(options: {
     ),
   } as unknown as WalletProvider;
   const walletForUser = vi.fn(async () => provider);
-  const clock = { now: () => NOW };
-  const gate = createGrantGate({ grants, walletForUser, clock });
+  const gate = createGrantGate({ grants, walletForUser });
   return { gate, grants, walletForUser, provider };
 }
 
@@ -73,6 +72,7 @@ const baseInput = {
   conversationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   text: `send 0.01 SOL to ${RECIPIENT}`,
   language: "es",
+  requestAt: NOW,
   pendingTransfer: {
     network: "solana-devnet",
     token: "SOL",
@@ -89,6 +89,8 @@ describe("createGrantGate (phase 3 factory)", () => {
       covered: true,
       source: "delegated_grant",
       grantId,
+      amountSmallestUnits: "10000000",
+      orderedCandidates: [{ grantId, amountSmallestUnits: "10000000" }],
     });
     expect(grants.resolveWalletId).toHaveBeenCalledWith(userId, "solana");
     expect(walletForUser).toHaveBeenCalledWith(userId, "solana");
@@ -101,6 +103,14 @@ describe("createGrantGate (phase 3 factory)", () => {
     });
     const decision = await gate.evaluate(baseInput);
     expect(decision).toBeNull();
+  });
+
+  it("excludes grants created after the original request timestamp", async () => {
+    const { gate } = fixtures({
+      grants: [grantRow({ createdAt: new Date(NOW + 1) })],
+    });
+
+    await expect(gate.evaluate(baseInput)).resolves.toBeNull();
   });
 
   it("amount mismatch between text and preview degrades closed", async () => {

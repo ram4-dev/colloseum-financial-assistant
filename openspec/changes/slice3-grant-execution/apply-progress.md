@@ -199,3 +199,56 @@ pinned +5s to absorb Postgres/process clock skew on `createdAt`; gate stub
 delivers real `classifyGrantCoverage` output so the service iteration runs
 against the real ledger; pre-claim exhausts the narrow grant's budget before
 the flow. Diagnostic console.logs removed.
+
+## Phases 5+6 — Parity, model-origin exclusion, E2E, verification (2026-10-05)
+
+### Phase 5 evidence
+
+- **Typed/voice parity + LiveKit layer** (`tests/unit/livekit/grant-parity.test.ts`, 3):
+  transcript funnels through the SAME `handleTurnStream` seam (identical gate contract);
+  the RoomConversation surface exposes no grant capability; degraded confirm/cancel
+  still routes through `resolveDecision`.
+- **Model-origin exclusion** (`tests/e2e/grant-gate-model-origin.e2e.test.ts`, 2):
+  tool `persistNativePreview` (dry-run, `preview:true` output) never consults gate/ledger
+  nor broadcasts; tool preview + EXPLICIT user confirm broadcasts exactly once with gate/
+  ledger uninvolved.
+- **Covered E2E both entry points** (`tests/e2e/grant-gate-entries.e2e.test.ts`, 1):
+  one service + one shared durable in-memory repository; typed turn and voice transcript
+  (signed Ed25519 binding) each skip confirmation via gate+claim+attempt-win; terminal
+  `sent`; D-7 multi-execution (two distinct durable attempts consumed the same grant).
+- Focused suites: 6 files / 45 tests (updated for the Fase-4 contract: gate decisions
+  carry `grantId`/`amountSmallestUnits`/`orderedCandidates`; service requires a consumed
+  `grantLedger.claim` before skipping).
+
+### Phase 6 verification (all exit 0)
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` (--max-warnings=0) | clean |
+| `npm run typecheck` | clean |
+| `npm run build` | clean |
+| Unit suite | 84 files / 657 passed, 1 skipped (exit 0) |
+| DB grants suite (:55501) | 5 files / 35 passed (exit 0) |
+| Focused parity + E2E suite | 6 files / 45 passed (exit 0) |
+| Full integration suite (:55501) | 37 files / 183 passed / 2 skipped / 6 failed |
+| Contract mirrors | zero delta (existing `sent` shape reused); `api-types.ts` untouched |
+| Scope check | no provider, LiveKit tool surface, or `transfer-pipeline.ts` changes in the diff |
+
+### Bounded-review fix (request-time classification, AD-2/Q1)
+
+`createGrantGate` previously captured `clock.now()` AFTER ledger/provider lookups; a
+grant created during slow lookups could cover an older request. Fixed: `handleTurnStream`
+captures `requestAt` at entry (before the first await) and passes it as a REQUIRED
+`GrantGateInput.requestAt`; the classifier's `now` is that captured instant. Regressions
+added for a grant created after `requestAt` (never a candidate) and a clock that advances
+during the turn (no eligibility change).
+
+### Full integration baseline comparison
+
+The six full-integration failures reproduce unchanged on `origin/main` at
+`c4d56c3` with the same local database and environment, in the same four files:
+two `users-db` sentinel tests (missing `DEMO_USER_ID`), one durable
+`api-conversations` create/read test (500), one `contacts-cross-user` timeout,
+and two `api-contacts` timeouts. The four-file baseline subset on `origin/main`
+also reports 6 failed / 10 passed. The delegated-grant database tests remain
+green in isolation (5 files / 35 passed).
