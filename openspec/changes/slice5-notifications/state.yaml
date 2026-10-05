@@ -17,7 +17,7 @@ apply: complete
 verify: failed
 delivery: blocked
 verification_evidence_revision: >-
-  sha256:dbc2932a24154ebe9d6ec2df084af6cd999f8980729ec32c849acd86408cb66c
+  sha256:d361f2fbf3343452e8a9538f8c1a66445289a4c4ebb2e6c54bb6444036485372
 verification_report: openspec/changes/slice5-notifications/verify-report.md
 out_of_scope:
   - multi_wallet
