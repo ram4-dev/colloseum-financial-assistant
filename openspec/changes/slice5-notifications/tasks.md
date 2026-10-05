@@ -35,7 +35,7 @@ Chain strategy: size-exception
 - [x] 2.2 Add idempotent owner-scoped ingestion and safe display projection.
 - [x] 2.3 Add authenticated feed/read API, raw-body signature verifier, scoped receipt dedupe.
 - [x] 2.4 Add bounded Solana pages, overlap-safe cursors, worker lease, backoff, startup and shutdown.
-- [ ] 2.5 Atomically outbox `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid` attempt states; skip retryable `not_dispatched`.
+- [x] 2.5 Atomically outbox `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid` attempt states; skip retryable `not_dispatched`.
 - [ ] 2.6 Retry outbox through canonical ingestion; atomically insert notification/complete event; fan out only after winning insert. Keep `wallet_operations` separate.
 
 ## Phase 3: Frontend and integration

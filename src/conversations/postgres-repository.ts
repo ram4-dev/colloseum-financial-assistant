@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import type { Queryable, DatabaseClient } from "../db/client.js";
 import type { PendingTransfer } from "../contracts/http.js";
+import { insertAssistantOutboxRow } from "./assistant-outbox.js";
 import type {
   AcquireLiveLeaseResult,
   ConversationRepository,
@@ -417,22 +418,32 @@ export class PostgresConversationRepository implements ConversationRepository {
     });
   }
 
-  public async markPendingTransferUncertain(
-    userId: string,
-    conversationId: string,
-  ): Promise<void> {
-    await this.database.withUserTransaction(userId, async (client) => {
-      await client.query(
-        `UPDATE conversation_transfer_attempts SET status = 'uncertain', updated_at = now()
-        WHERE conversation_id = $1 AND user_id = $2 AND status = 'broadcasting'`,
-        [conversationId, userId],
-      );
-      await client.query(
-        "UPDATE conversation_state SET revision = revision + 1, updated_at = now() WHERE conversation_id = $1 AND user_id = $2",
-        [conversationId, userId],
-      );
-    });
-  }
+      public async markPendingTransferUncertain(
+        userId: string,
+        conversationId: string,
+      ): Promise<void> {
+        await this.database.withUserTransaction(userId, async (client) => {
+          const attempt = await client.query<{ id: string }>(
+            `UPDATE conversation_transfer_attempts SET status = 'uncertain', updated_at = now()
+            WHERE conversation_id = $1 AND user_id = $2 AND status = 'broadcasting'
+            RETURNING id`,
+            [conversationId, userId],
+          );
+          // Stale/duplicate callback: zero rows returned, nothing transitioned,
+          // so no outbox event and no unexpected failure.
+          if (attempt.rows[0]) {
+            await insertAssistantOutboxRow(client, {
+              attemptId: attempt.rows[0].id,
+              userId,
+              status: "uncertain",
+            });
+          }
+          await client.query(
+            "UPDATE conversation_state SET revision = revision + 1, updated_at = now() WHERE conversation_id = $1 AND user_id = $2",
+            [conversationId, userId],
+          );
+        });
+      }
 
   public async setLastTransactionHash(
     userId: string,
@@ -448,18 +459,26 @@ export class PostgresConversationRepository implements ConversationRepository {
     hash: string,
     walletResult?: unknown,
   ): Promise<void> {
-    await this.database.withUserTransaction(userId, async (client) => {
-      await client.query(
-        `UPDATE conversation_state SET last_transaction_hash = $3, revision = revision + 1, updated_at = now()
-        WHERE conversation_id = $1 AND user_id = $2`,
-        [conversationId, userId, hash],
-      );
-      await client.query(
-        `UPDATE conversation_transfer_attempts SET transaction_hash = $3, status = 'submitted', updated_at = now()
-        , wallet_result = $4::jsonb WHERE conversation_id = $1 AND user_id = $2 AND status = 'broadcasting'`,
-        [conversationId, userId, hash, JSON.stringify(walletResult ?? {})],
-      );
-    });
+        await this.database.withUserTransaction(userId, async (client) => {
+          await client.query(
+            `UPDATE conversation_state SET last_transaction_hash = $3, revision = revision + 1, updated_at = now()
+            WHERE conversation_id = $1 AND user_id = $2`,
+            [conversationId, userId, hash],
+          );
+          const attempt = await client.query<{ id: string }>(
+            `UPDATE conversation_transfer_attempts SET transaction_hash = $3, status = 'submitted', updated_at = now()
+            , wallet_result = $4::jsonb WHERE conversation_id = $1 AND user_id = $2 AND status = 'broadcasting'
+            RETURNING id`,
+            [conversationId, userId, hash, JSON.stringify(walletResult ?? {})],
+          );
+          if (attempt.rows[0]) {
+            await insertAssistantOutboxRow(client, {
+              attemptId: attempt.rows[0].id,
+              userId,
+              status: "submitted",
+            });
+          }
+        });
   }
 
   public async finalizeTransfer(
@@ -473,9 +492,10 @@ export class PostgresConversationRepository implements ConversationRepository {
     },
   ): Promise<void> {
     await this.database.withUserTransaction(userId, async (client) => {
-      await client.query(
+      const attempt = await client.query<{ id: string }>(
         `UPDATE conversation_transfer_attempts SET status = $4, receipt_result = $5::jsonb, failure = $6::jsonb, transaction_hash = $3, updated_at = now()
-        WHERE conversation_id = $1 AND user_id = $2 AND transaction_hash = $3 AND status IN ('submitted', 'broadcasting')`,
+        WHERE conversation_id = $1 AND user_id = $2 AND transaction_hash = $3 AND status IN ('submitted', 'broadcasting')
+        RETURNING id`,
         [
           conversationId,
           userId,
@@ -485,6 +505,13 @@ export class PostgresConversationRepository implements ConversationRepository {
           JSON.stringify(result.failure ?? null),
         ],
       );
+      if (attempt.rows[0]) {
+        await insertAssistantOutboxRow(client, {
+          attemptId: attempt.rows[0].id,
+          userId,
+          status: result.status,
+        });
+      }
       await client.query(
         `UPDATE conversation_state SET revision = revision + 1, last_transaction_hash = $3, updated_at = now() WHERE conversation_id = $1 AND user_id = $2`,
         [conversationId, userId, result.transactionHash],
