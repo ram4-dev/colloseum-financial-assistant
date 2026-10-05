@@ -77,6 +77,16 @@ const toneClasses: Record<WalletStateTone, string> = {
  * values must never render as a working, activatable grant (fail-closed).
  */
 function hasBoundedLimits(permission: WalletPermissionResponse): boolean {
+  if (permission.perTransferSol !== "") {
+    const perTransferSol = Number(permission.perTransferSol);
+    return (
+      Number.isFinite(perTransferSol) &&
+      perTransferSol > 0 &&
+      perTransferSol <= 0.01 &&
+      permission.rollingWindowSeconds > 0 &&
+      permission.recipients.length > 0
+    );
+  }
   const perTransfer = Number(permission.perTransferUsdc);
   const rollingTotal = Number(permission.rollingTotalUsdc);
   return (
@@ -382,13 +392,18 @@ export function WalletLifecycle({ userId }: { userId: string | undefined }) {
             <dl className="mt-4 space-y-2 text-base">
               <div className="flex justify-between gap-4">
                 <dt className="font-bold">Por transferencia</dt>
-                <dd className="text-right font-extrabold">{permission.perTransferUsdc} USDC</dd>
+                <dd className="text-right font-extrabold">
+                  {permission.perTransferSol !== ""
+                    ? `${permission.perTransferSol} SOL`
+                    : `${permission.perTransferUsdc} USDC`}
+                </dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="font-bold">Acumulado</dt>
                 <dd className="text-right font-extrabold">
-                  {permission.rollingTotalUsdc} USDC{" "}
-                  {formatWindowLabel(permission.rollingWindowSeconds)}
+                  {permission.perTransferSol !== ""
+                    ? "Pendiente en SOL"
+                    : `${permission.rollingTotalUsdc} USDC ${formatWindowLabel(permission.rollingWindowSeconds)}`}
                 </dd>
               </div>
               <div className="flex justify-between gap-4">
@@ -471,10 +486,15 @@ export function WalletLifecycle({ userId }: { userId: string | undefined }) {
               // modal (addSigners with the backend quorum + immutable policy),
               // then the server read-back (complete) decides activation.
               <Suspense fallback={<RoutePendingInline />}>
+                <p className="mb-3 text-sm font-semibold" role="status">
+                  Tope máximo por transferencia:{" "}
+                  {preparation.perTransferSol !== ""
+                    ? `${preparation.perTransferSol} SOL`
+                    : `${preparation.perTransferUsdc} USDC`}
+                  .
+                </p>
                 <PrivySignerEnrollment
                   walletAddress={preparation.walletAddress}
-                  quorumId={preparation.quorumId}
-                  policyId={preparation.policyId}
                   busy={isActivating}
                   onEnrolled={() => handlePrivyComplete()}
                   onError={(message) => setPermissionMessage(message)}

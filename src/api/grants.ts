@@ -17,6 +17,7 @@ import {
 } from "../contracts/http.js";
 import {
   GrantWalletUnavailableError,
+  InvalidGrantInputError,
   type DelegatedGrantService,
   type DelegatedGrantRow,
 } from "../wallet/grants/consumption.js";
@@ -128,6 +129,12 @@ export async function registerGrantsRoutes(
           return reply.code(409).send({
             ok: false,
             error: { code: "wallet_unavailable", message: error.message },
+          });
+        }
+        if (error instanceof InvalidGrantInputError) {
+          return reply.code(400).send({
+            ok: false,
+            error: { code: "solicitud_invalida", message: error.message, field: "maxPerTransfer" },
           });
         }
         const invalid = validationError(error);

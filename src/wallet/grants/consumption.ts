@@ -53,6 +53,13 @@ export type CreateGrantInput = {
   expiresAt: Date;
 };
 
+export class InvalidGrantInputError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "InvalidGrantInputError";
+  }
+}
+
 export type ClaimConsumptionResult = {
   /** True when budget was consumed by this call, including an idempotent replay. */
   consumed: boolean;
@@ -259,6 +266,12 @@ export class DelegatedGrantService {
   public async createGrant(
     input: CreateGrantInput,
   ): Promise<DelegatedGrantRow> {
+    const perTransfer = normalizeDecimal(input.maxPerTransfer);
+    if (input.chain === "solana" && (!/^\d+$/.test(perTransfer) || BigInt(perTransfer) > 10_000_000n)) {
+      throw new InvalidGrantInputError(
+        "Solana maxPerTransfer cannot exceed 0.01 SOL (10,000,000 lamports).",
+      );
+    }
     return this.database.withUserTransaction(input.userId, (client) =>
       this.createGrantInTransaction(input, client),
     );

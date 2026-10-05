@@ -1,23 +1,35 @@
-import type { PendingTransfer, TransactionResult, TransferPreview } from '../contracts/http.js';
+import type {
+  PendingTransfer,
+  TransactionResult,
+  TransferPreview,
+} from "../contracts/http.js";
 
 export type WalletContext = { wallet: string; network: string };
 export type WalletProviderHealth = {
-  status: 'healthy' | 'degraded' | 'unavailable';
+  status: "healthy" | "degraded" | "unavailable";
   reason?: string;
 };
-export type WalletNetwork = { network: string; kind: 'mainnet' | 'testnet' };
+export type WalletNetwork = { network: string; kind: "mainnet" | "testnet" };
 export type WalletToken = { network: string; token: string; decimals: number };
 export type WalletAddress = { network: string; address: string };
-export type WalletBalance = { network: string; token?: string; address: string; balance: string };
-export type WalletHistory = { network: string; transactions: Array<Record<string, string>> };
+export type WalletBalance = {
+  network: string;
+  token?: string;
+  address: string;
+  balance: string;
+};
+export type WalletHistory = {
+  network: string;
+  transactions: Array<Record<string, string>>;
+};
 export type WalletBalanceQuery = WalletContext & { token?: string };
 export type WalletHistoryQuery = WalletContext & { token?: string };
 export type BroadcastOutcome =
-  | { kind: 'submitted'; transaction: TransactionResult }
-  | { kind: 'uncertain'; reason: string }
-  | { kind: 'not_dispatched'; reason: string };
+  | { kind: "submitted"; transaction: TransactionResult }
+  | { kind: "uncertain"; reason: string }
+  | { kind: "not_dispatched"; reason: string };
 export type FinalityOutcome = {
-  status: 'confirmed' | 'reverted' | 'receipt_invalid';
+  status: "confirmed" | "reverted" | "receipt_invalid";
   transactionHash: string;
   network: string;
   reason?: string;
@@ -25,20 +37,31 @@ export type FinalityOutcome = {
 export type FinalityRequest =
   | TransactionResult
   | { transaction: TransactionResult; signal?: AbortSignal };
-export type TransferRequest = Omit<PendingTransfer, 'preview'>;
+export type TransferRequest = Omit<PendingTransfer, "preview">;
 
 const EXPLORER_URLS: Record<string, string> = {
-  sepolia: 'https://sepolia.etherscan.io/tx/',
-  'arc-testnet': 'https://testnet.arcscan.app/tx/',
+  sepolia: "https://sepolia.etherscan.io/tx/",
+  "arc-testnet": "https://testnet.arcscan.app/tx/",
+  "solana-devnet": "https://explorer.solana.com/tx/",
 };
 
-export function explorerUrlFor(network: string, transactionHash: string): string {
-  return `${EXPLORER_URLS[network] ?? 'https://sepolia.etherscan.io/tx/'}${transactionHash}`;
+/** Devnet explorer links carry the cluster query param AFTER the hash. */
+const EXPLORER_URL_SUFFIXES: Record<string, string> = {
+  "solana-devnet": "?cluster=devnet",
+};
+
+export function explorerUrlFor(
+  network: string,
+  transactionHash: string,
+): string {
+  const base = EXPLORER_URLS[network] ?? "https://sepolia.etherscan.io/tx/";
+  const suffix = EXPLORER_URL_SUFFIXES[network] ?? "";
+  return `${base}${transactionHash}${suffix}`;
 }
 
 export interface WalletProvider {
   readonly id: string;
-  readonly mode: 'fixture' | 'live';
+  readonly mode: "fixture" | "live";
   health(context: WalletContext): Promise<WalletProviderHealth>;
   listNetworks(): Promise<WalletNetwork[]>;
   listTokens(network?: string): Promise<WalletToken[]>;
@@ -47,6 +70,9 @@ export interface WalletProvider {
   getHistory(query: WalletHistoryQuery): Promise<WalletHistory>;
   previewTransfer(request: TransferRequest): Promise<TransferPreview>;
   broadcastTransfer(request: TransferRequest): Promise<BroadcastOutcome>;
-  waitForFinality(request: FinalityRequest, signal?: AbortSignal): Promise<FinalityOutcome>;
+  waitForFinality(
+    request: FinalityRequest,
+    signal?: AbortSignal,
+  ): Promise<FinalityOutcome>;
   close(): Promise<void>;
 }

@@ -60,10 +60,7 @@ import {
 import { registerWalletsRoutes } from "./api/wallets.js";
 import { registerGrantsRoutes } from "./api/grants.js";
 import { DelegatedGrantService } from "./wallet/grants/consumption.js";
-import {
-  createUnavailableGrantPolicyProvisioner,
-  PrivyPolicySyncService,
-} from "./wallet/grants/privy-policy-sync.js";
+import { createGrantPolicySyncService } from "./wallet/grants/privy-policy-runtime.js";
 import { readPrivyServerConfig } from "./config/privy-server.js";
 import { PrivyServerClient } from "./wallet/privy-server-client.js";
 import { createPrivyWalletHealthProvider } from "./wallet/privy-user-provider.js";
@@ -166,6 +163,8 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
           appId: privyServerConfig.appId,
           appSecret: privyServerConfig.appSecret,
           baseUrl: privyServerConfig.baseUrl,
+          authorizationPrivateKey:
+            process.env.PRIVY_AUTHORIZATION_PRIVATE_KEY?.trim() || undefined,
         })
       : undefined);
   const walletForUser = database
@@ -185,17 +184,16 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
   });
 
   if (database) {
-    // DGC-4/D-4: grants use the Postgres ledger plus a provider policy. Slice 1
-    // has no denomination-safe Solana policy adapter yet, so provisioning
-    // fails closed and every grant remains non-executable until Slice 2 wires
-    // the WalletProvider adapter.
+    // DGC-4/D-4: the ledger stays authoritative and Solana grants receive a
+    // composed, signer-bound Privy policy only when signed server credentials
+    // and the canonical authorization quorum are configured. Otherwise the
+    // Slice 1 unavailable provisioner keeps grants non-executable.
     const grants = new DelegatedGrantService(database);
-    const grantPolicySync = new PrivyPolicySyncService(
+    const grantPolicySync = createGrantPolicySyncService({
       database,
-      createUnavailableGrantPolicyProvisioner(
-        "Solana grant policy adapter is not available in Slice 1.",
-      ),
-    );
+      privyServer,
+      quorumId: privyServerConfig?.keyQuorumId,
+    }).service;
     app.register(registerGrantsRoutes, {
       grants,
       policySync: grantPolicySync,

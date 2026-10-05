@@ -34,6 +34,7 @@ import {
 } from "../wallet/provider.js";
 import {
   bindWalletForUser,
+  walletChainFamilyForNetwork,
   type WalletForUser,
 } from "../wallet/privy-user-provider.js";
 import { validateWalletTransferPolicy } from "../wallet/agent-tools.js";
@@ -123,12 +124,7 @@ export type ConversationEvent =
       id: string;
       text: string;
       reason:
-        | "started"
-        | "delayed"
-        | "decision"
-        | "result"
-        | "answer"
-        | "uncertain";
+        "started" | "delayed" | "decision" | "result" | "answer" | "uncertain";
     }
   | { type: "turn-completed"; result: ConversationTurnResult };
 
@@ -184,9 +180,13 @@ export function createWalletConversationService(
 ): WalletConversationService {
   const clock = dependencies.clock ?? { now: () => Date.now() };
   const narration = dependencies.narration ?? createNarrationPolicy({ clock });
-  const walletForUser = (userId: string): WalletProvider =>
+  const walletForUser = (userId: string, network?: string): WalletProvider =>
     dependencies.walletForUser
-      ? bindWalletForUser(dependencies.walletForUser, userId)
+      ? bindWalletForUser(dependencies.walletForUser, userId, () =>
+          walletChainFamilyForNetwork(
+            network ?? getWalletAgentConfig().network,
+          ),
+        )
       : dependencies.wallet;
 
   async function* handleTurnStream(
@@ -645,9 +645,10 @@ export function createWalletConversationService(
 
     let preview: TransferPreview;
     try {
-      preview = await walletForUser(input.userId).previewTransfer(
-        transferRequest,
-      );
+      preview = await walletForUser(
+        input.userId,
+        config.network,
+      ).previewTransfer(transferRequest);
     } catch {
       return errorResult(errorFromCode("wallet_unavailable"));
     }
@@ -711,12 +712,7 @@ export function createWalletConversationService(
   async function* emitSpoken(
     text: string,
     reason:
-      | "started"
-      | "delayed"
-      | "decision"
-      | "result"
-      | "answer"
-      | "uncertain",
+      "started" | "delayed" | "decision" | "result" | "answer" | "uncertain",
   ): AsyncIterable<ConversationEvent> {
     const input = { reason, text };
     if (!narration.shouldNarrate(input)) return;
@@ -797,7 +793,10 @@ export function createWalletConversationService(
 
     let broadcast;
     try {
-      broadcast = await walletForUser(userId).broadcastTransfer(transfer);
+      broadcast = await walletForUser(
+        userId,
+        transfer.network,
+      ).broadcastTransfer(transfer);
     } catch (error) {
       broadcast = {
         kind: "uncertain" as const,
@@ -882,7 +881,10 @@ export function createWalletConversationService(
 
     let finality;
     try {
-      finality = await walletForUser(userId).waitForFinality({ transaction });
+      finality = await walletForUser(
+        userId,
+        transaction.network,
+      ).waitForFinality({ transaction });
     } catch (error) {
       finality = {
         status: "receipt_invalid" as const,
@@ -968,12 +970,7 @@ export function createWalletConversationService(
   async function publishSpoken(
     text: string,
     reason:
-      | "started"
-      | "delayed"
-      | "decision"
-      | "result"
-      | "answer"
-      | "uncertain",
+      "started" | "delayed" | "decision" | "result" | "answer" | "uncertain",
   ): Promise<void> {
     const input = { reason, text };
     if (!narration.shouldNarrate(input)) return;
@@ -1331,14 +1328,12 @@ function spokenResultMessage(
 function errorResult(
   error: unknown,
 ): Extract<ConversationTurnResult, { status: "error" }> {
-  if (
-    !(
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      typeof error.code === "string"
-    )
-  ) {
+  if (!(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+  )) {
     // Unexpected failures must be visible in the process log; the generic
     // internal_error response alone made live diagnostics impossible.
     console.error(
@@ -1392,10 +1387,10 @@ function sanitizeResult(
 function isToolError(output: unknown): output is Record<string, unknown> {
   return Boolean(
     output &&
-      typeof output === "object" &&
-      !Array.isArray(output) &&
-      typeof (output as { error?: unknown }).error === "string" &&
-      typeof (output as { message?: unknown }).message === "string",
+    typeof output === "object" &&
+    !Array.isArray(output) &&
+    typeof (output as { error?: unknown }).error === "string" &&
+    typeof (output as { message?: unknown }).message === "string",
   );
 }
 
@@ -1440,10 +1435,10 @@ async function isClaimedRecipientValid(
   );
   return Boolean(
     current &&
-      current.id === transfer.recipientId &&
-      current.version === transfer.recipientVersion &&
-      isValidEvmAddress(current.address) &&
-      current.address === transfer.to,
+    current.id === transfer.recipientId &&
+    current.version === transfer.recipientVersion &&
+    isValidEvmAddress(current.address) &&
+    current.address === transfer.to,
   );
 }
 

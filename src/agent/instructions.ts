@@ -1,30 +1,31 @@
 export type WalletAgentConfig = {
-  wallet: string;
-  network: string;
-  token: string;
+    wallet: string;
+    network: string;
+    token: string;
 };
 
 export function getWalletAgentConfig(): WalletAgentConfig {
-  const privyUserWallet = process.env.IDENTITY_PROVIDER === "privy";
-  return {
-    wallet:
-      process.env.WDK_WALLET_NAME ??
-      (privyUserWallet ? "privy-user" : "agent-demo"),
-    network:
-      process.env.WDK_NETWORK ?? (privyUserWallet ? "arc-testnet" : "sepolia"),
-    token: process.env.WDK_TOKEN ?? (privyUserWallet ? "USDC" : "USDT"),
-  };
+    const privyUserWallet = process.env.IDENTITY_PROVIDER === "privy";
+    return {
+        wallet:
+            process.env.WDK_WALLET_NAME ??
+            (privyUserWallet ? "privy-user" : "agent-demo"),
+        network:
+            process.env.WDK_NETWORK ??
+            (privyUserWallet ? "arc-testnet" : "sepolia"),
+        token: process.env.WDK_TOKEN ?? (privyUserWallet ? "USDC" : "USDT"),
+    };
 }
 
 export function buildWalletAgentInstructions(
-  config: WalletAgentConfig,
-  language: "es" | "en" = "en",
+    config: WalletAgentConfig,
+    language: "es" | "en" = "en",
 ): string {
-  const languageLine =
-    language === "es"
-      ? "- Respond in Spanish with natural Rioplatense phrasing."
-      : "- Respond in English.";
-  return `You are a wallet transaction agent powered by WDK.
+    const languageLine =
+        language === "es"
+            ? "- Respond in Spanish with natural Rioplatense phrasing."
+            : "- Respond in English.";
+    return `You are a wallet transaction agent powered by WDK.
 
 Active configuration (use these exact values in every tool call unless the
 user unambiguously specifies a different network, contract, or non-generic alias):

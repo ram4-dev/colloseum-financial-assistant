@@ -308,6 +308,7 @@ export type WalletPermissionResponse = {
   userId: string;
   state: PermissionState;
   perTransferUsdc: string;
+  perTransferSol: string;
   rollingTotalUsdc: string;
   rollingWindowSeconds: number;
   gasCeiling: string;
@@ -337,6 +338,7 @@ export type EnrollmentPreparationResponse = {
   policyId: string;
   quorumId: string;
   perTransferUsdc: string;
+  perTransferSol: string;
   rollingTotalUsdc: string;
   windowSeconds: number;
   aggregationReady: false;

@@ -13,11 +13,21 @@ import type { DelegatedGrant } from "@/lib/api-types";
  * but can never mutate it.
  */
 
-function formatLimit(amount: string): string {
-  // Decimal string in smallest units → readable display (lamports for MVP).
-  const normalized = amount.replace(/_/g, "");
-  const big = BigInt(normalized);
-  return big.toLocaleString("es-AR");
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+const MAX_PER_TRANSFER_LAMPORTS = 10_000_000n;
+
+function formatSol(lamports: string): string {
+  const value = BigInt(lamports.replace(/_/g, ""));
+  const whole = value / LAMPORTS_PER_SOL;
+  const fraction = (value % LAMPORTS_PER_SOL).toString().padStart(9, "0").replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+function parseSol(value: string): bigint | null {
+  const match = /^(\d+)(?:\.(\d{1,9}))?$/.exec(value.trim().replace(",", "."));
+  if (!match) return null;
+  const fraction = (match[2] ?? "").padEnd(9, "0");
+  return BigInt(match[1]!) * LAMPORTS_PER_SOL + BigInt(fraction || "0");
 }
 
 function GrantCard({
@@ -52,11 +62,11 @@ function GrantCard({
       <dl className="mt-3 space-y-1 text-sm text-muted-foreground">
         <div className="flex justify-between">
           <dt>Máximo por transferencia</dt>
-          <dd className="font-mono">{formatLimit(grant.maxPerTransfer)}</dd>
+          <dd className="font-mono">{formatSol(grant.maxPerTransfer)} SOL</dd>
         </div>
         <div className="flex justify-between">
           <dt>Tope acumulado</dt>
-          <dd className="font-mono">{formatLimit(grant.maxCumulative)}</dd>
+          <dd className="font-mono">{formatSol(grant.maxCumulative)} SOL</dd>
         </div>
         <div className="flex justify-between">
           <dt>Ventana</dt>
@@ -75,6 +85,11 @@ function GrantCard({
           <dd>{grant.recipients.length}</dd>
         </div>
       </dl>
+      {grant.chain === "solana" ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Tope máximo por transferencia: 0.01 SOL.
+        </p>
+      ) : null}
       {grant.state === "active" && (
         <Button
           variant="outline"
@@ -92,8 +107,8 @@ function GrantCard({
 export function DelegatedGrantsSection({ userId }: { userId: string | undefined }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const [maxPerTransfer, setMaxPerTransfer] = useState("1000000");
-  const [maxCumulative, setMaxCumulative] = useState("5000000");
+  const [maxPerTransfer, setMaxPerTransfer] = useState("0.01");
+  const [maxCumulative, setMaxCumulative] = useState("0.05");
   const [recipientInput, setRecipientInput] = useState("");
 
   const grantsQuery = useQuery({
@@ -122,19 +137,24 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
       if (recipients.length === 0) {
         throw new Error("Agregá al menos una dirección autorizada.");
       }
-      if (!/^\d+$/.test(maxPerTransfer) || !/^\d+$/.test(maxCumulative)) {
-        throw new Error("Los límites deben ser números enteros positivos.");
+      const maxPerTransferLamports = parseSol(maxPerTransfer);
+      const maxCumulativeLamports = parseSol(maxCumulative);
+      if (maxPerTransferLamports === null || maxCumulativeLamports === null) {
+        throw new Error("Ingresá los límites en SOL con hasta 9 decimales.");
       }
-      if (BigInt(maxPerTransfer) <= 0n || BigInt(maxCumulative) < BigInt(maxPerTransfer)) {
+      if (maxPerTransferLamports <= 0n || maxCumulativeLamports < maxPerTransferLamports) {
         throw new Error(
           "El tope acumulado debe ser igual o mayor que el máximo por transferencia.",
         );
       }
+      if (maxPerTransferLamports > MAX_PER_TRANSFER_LAMPORTS) {
+        throw new Error("El tope por transferencia no puede superar 0.01 SOL.");
+      }
       return api.createGrant({
         action: "transfer",
         chain: "solana",
-        maxPerTransfer,
-        maxCumulative,
+        maxPerTransfer: maxPerTransferLamports.toString(),
+        maxCumulative: maxCumulativeLamports.toString(),
         windowSeconds: 86_400,
         recipients,
         expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
@@ -216,20 +236,20 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
           }}
         >
           <label className="block text-sm font-medium">
-            Máximo por transferencia (unidad mínima)
+            Máximo por transferencia (SOL)
             <input
               className="mt-1 w-full rounded-lg border border-border bg-background p-2"
-              inputMode="numeric"
+              inputMode="decimal"
               value={maxPerTransfer}
               onChange={(event) => setMaxPerTransfer(event.target.value)}
               aria-label="Máximo por transferencia"
             />
           </label>
           <label className="block text-sm font-medium">
-            Máximo acumulado por día (unidad mínima)
+            Máximo acumulado por día (SOL)
             <input
               className="mt-1 w-full rounded-lg border border-border bg-background p-2"
-              inputMode="numeric"
+              inputMode="decimal"
               value={maxCumulative}
               onChange={(event) => setMaxCumulative(event.target.value)}
               aria-label="Máximo acumulado por día"
@@ -247,8 +267,8 @@ export function DelegatedGrantsSection({ userId }: { userId: string | undefined 
             />
           </label>
           <p className="text-xs text-muted-foreground">
-            Vence en 7 días. La creación no habilita transferencias si la política del proveedor
-            todavía no está disponible.
+            Tope por transferencia: 0.01 SOL. Vence en 7 días. La creación no habilita
+            transferencias si la política del proveedor todavía no está disponible.
           </p>
           <Button type="submit" disabled={createMutation.isPending}>
             {createMutation.isPending ? "Creando…" : "Crear autorización"}

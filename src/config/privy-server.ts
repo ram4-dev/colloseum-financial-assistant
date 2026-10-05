@@ -81,9 +81,17 @@ export function readPrivyServerConfig(
  // singleton wallet provider in privy mode.
  const identityProvider = readIdentityProviderMode(environment);
  const source = environment.WDK_TOOLS_SOURCE?.trim() || "fixture";
- if (identityProvider === "privy" && source !== "fixture") {
+ // PMU-024: Solana devnet is the only live provider allowed in Privy identity
+ // mode because its signing path requires a per-user wallet binding; the
+ // singleton Solana provider has no sender identity and fails closed.
+ const perUserBoundSolana = source === "solana-devnet";
+ if (
+  identityProvider === "privy" &&
+  source !== "fixture" &&
+  !perUserBoundSolana
+ ) {
   throw new Error(
-   `WDK_TOOLS_SOURCE=${source} is not allowed with IDENTITY_PROVIDER=privy: the identity foundation must not start with a funded singleton wallet provider. Use 'fixture' until the per-user wallet change ships.`,
+   `WDK_TOOLS_SOURCE=${source} is not allowed with IDENTITY_PROVIDER=privy: use 'fixture' or the per-user-bound 'solana-devnet' provider.`,
   );
  }
 
