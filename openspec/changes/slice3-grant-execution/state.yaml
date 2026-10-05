@@ -10,7 +10,7 @@ phases:
   spec: completed
   design: completed
   tasks: completed
-  apply: not_started
+  apply: in_progress
   verify: not_started
   archive: not_started
 notes: >
