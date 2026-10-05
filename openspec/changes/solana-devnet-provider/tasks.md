@@ -63,9 +63,9 @@ disables the selector and leaves fail-closed behavior.
 
 ## 4. Delivery
 
-- [ ] 4.1 Incremental conventional commits (WU1→WU4) and push.
-- [ ] 4.2 One draft PR targeting `main`; no merge.
-- [ ] 4.3 Update Herdr receipt and state.
+- [x] 4.1 Incremental conventional commits (WU1→WU4) and push.
+- [x] 4.2 Draft PR #2 targeting `main`; no merge.
+- [x] 4.3 Update Herdr receipt and state.
 
 ## Deferred human validation
 

@@ -180,4 +180,7 @@ notes: >
   Review 16 race/retry PASS remains recorded in the independent-review log.
   The retry blocker on denomination is closed by the explicit decision and
   this implementation. No live Privy readback or devnet signature was run;
-  tasks 3.4/3.5 remain human/environment-gated.
+  tasks 3.4/3.5 remain human/environment-gated. Delivery: draft PR #2
+  https://github.com/ram4-dev/colloseum-financial-assistant/pull/2, branch
+  `slice2-provider-solana-devnet`, rebased on origin/main. CI/Hermes testing
+  is pending; the PR is intentionally unmerged.

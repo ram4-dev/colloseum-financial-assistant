@@ -345,3 +345,13 @@ updated_at: 2026-10-04
   contact-name assertion fails; backend confirmation/no-broadcast checks and
   chat preview pass. Live Privy readback and human devnet signature remain
   pending.
+- Delivery commits after rebase: `dcfed4a` (tests), `897db70` (implementation),
+  `95a5ca4` (SDD/receipt). Pushed to
+  `origin/slice2-provider-solana-devnet`; draft PR #2 targets `main`:
+  https://github.com/ram4-dev/colloseum-financial-assistant/pull/2. No merge.
+- Hermes handoff was attempted via the Telegram bot connector but returned
+  `chat not found`; computer-use access to Telegram was denied. The PR body
+  records Hermes testing as pending. No alternate chat or recipient was used.
+- Closed only the two tabs created for this continuation (`w5:t2C`, `w5:t2D`);
+  verified both are absent from the workspace tab list. Existing Slice 2 tabs
+  and all other pre-existing tabs remain open.
