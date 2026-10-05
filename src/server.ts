@@ -223,6 +223,11 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
               grants,
               walletForUser,
             }),
+            // AD-6: the atomic ledger claim is the sole execution
+            // authority; same grants service as the HTTP lifecycle.
+            grantLedger: {
+              claim: (input) => grants.claimConsumption(input),
+            },
           }
         : {}),
       // PMU-014: memory scoped to the RESOLVED per-request user in every mode;

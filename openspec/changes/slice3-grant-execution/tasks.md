@@ -32,9 +32,9 @@ PR #3 stacks on `origin/slice2-provider-solana-devnet` until PR #2 merges. Herme
 
 ## Phase 4 — Atomic claim RED/GREEN
 
-- [ ] 4.1 RED DB tests: `claimConsumption` rechecks state/window and records claim/audit before broadcast; no pre-filter `consumedInWindow` call.
-- [ ] 4.2 RED races: distinct claims yield one consumption; revoke/expiry before claim rejects; boundary and +1 amounts are deterministic.
-- [ ] 4.3 RED replay: same key reuses claim without duplicate audit/consumption; broadcast and crash retry require winning `claimPendingTransfer`.
+- [x] 4.1 RED DB tests: `claimConsumption` rechecks state/window and records claim/audit before broadcast; no pre-filter `consumedInWindow` call.
+- [x] 4.2 RED races: distinct claims yield one consumption; revoke/expiry before claim rejects; boundary and +1 amounts are deterministic.
+- [x] 4.3 RED replay: same key reuses claim without duplicate audit/consumption; broadcast and crash retry require winning `claimPendingTransfer`.
 - [ ] 4.4 Implement ordered candidate fallback and audited degradation; run DB integration tests against real Postgres.
 
 ## Phase 5 — Typed/voice parity and E2E

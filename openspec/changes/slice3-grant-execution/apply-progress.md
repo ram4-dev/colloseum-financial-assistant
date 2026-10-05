@@ -116,3 +116,51 @@ semantics, revoke/expiry between preview and execution, window rejection.
   `conversation-preview-claim-race`, `voice-touch-decision-race`):
   **4 files / 6 tests pass**. The `api-contacts` rerun that hung >2 min with
   no active DB query was stopped rather than waiting for timeouts.
+
+## Phase 4 — Atomic ledger claim (completed 2026-10-05)
+
+### RED evidence (before grantLedger wiring)
+
+`DATABASE_URL=:55501/wdk_agent vitest run tests/integration/delegated-grant-execution.test.ts`:
+3 cases failed with `AssertionError: expected false to be true` — the real
+`grants.claimConsumption` callback was never invoked by the service. Two harness
+defects were corrected first (pre-seeded attempt, non-durable previewId in the
+spy repository) so the RED was specifically the missing claim integration:
+`saveSnapshot` now models the durable repository behavior (new pendingTransfer
+creates `conversation_transfer_attempts` and attaches the durable attempt id),
+and the replay case pre-claims `grant-exec:{userId}:{predeterminedAttemptId}`.
+
+### GREEN evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Integration ordering suite | `vitest run tests/integration/delegated-grant-execution.test.ts` (DATABASE_URL :55501/wdk_agent) | **3/3** |
+| Typecheck / lint | `npm run typecheck` / `npm run lint` | clean |
+
+### Implementation
+
+- `src/conversations/service.ts`: `grantLedger.claim` dependency. AD-6 sequencing
+  on the delegated-grant path: **claimConsumption BEFORE claimPendingTransfer** —
+  missing context (grantId/amountSmallestUnits), missing ledger, rejection, or any
+  ledger error ⇒ degrade closed with NO attempt claim and NO broadcast. Key =
+  `grant-exec:{userId}:{persisted attemptId}`; `amountSmallestUnits` exact from
+  the classifier. Replay returns the same budget claim but never authorizes a
+  broadcast by itself — the broadcast still requires winning the single-winner
+  attempt claim. Explicit user confirms keep the existing ordering.
+- `src/conversations/grant-gate.ts`: covered decision now carries
+  `amountSmallestUnits` (exact smallest-units from `CoverageDecision`).
+- `src/server.ts`: `grantLedger.claim` wired from the same `grants` service
+  (`grants.claimConsumption`), conditional on `walletForUser` like the gate.
+
+### Tests
+
+`tests/integration/delegated-grant-execution.test.ts` (3, real Postgres):
+claim-commits-before-attempt-and-broadcast (event order: ledger:consumed <
+attempt:broadcasting < submitted); real rejected claim (unbound grant ⇒
+`policy_not_ready`) never claims the attempt nor broadcasts; same-key replay
+(no second audit row) still requires winning `claimPendingTransfer`.
+
+### Next
+
+4.4 remainder: ordered candidate fallback + audited degradation; then Phase 5
+(typed/voice parity + E2E).

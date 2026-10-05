@@ -42,6 +42,8 @@ export type GrantGateDecision = {
   covered: boolean;
   source?: "delegated_grant";
   grantId?: string;
+  /** Exact smallest-unit amount (AD-6 claim input). Required when covered. */
+  amountSmallestUnits?: string;
 } | null;
 
 export type GrantGateDependencies = {
@@ -152,6 +154,8 @@ export function createGrantGate(dependencies: GrantGateDependencies): {
           covered: true,
           source: "delegated_grant",
           grantId: decision.grantId,
+          // Exact smallest-unit amount for the atomic ledger claim.
+          amountSmallestUnits: decision.amountSmallestUnits,
         };
       } catch {
         // Fail closed: ledger/provider/parsing failures degrade to the

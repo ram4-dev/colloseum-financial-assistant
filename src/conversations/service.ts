@@ -201,7 +201,24 @@ export type WalletConversationDependencies = {
       covered: boolean;
       source?: "delegated_grant";
       grantId?: string;
+      /** Exact smallest-unit amount (AD-6 claim input). Required when covered. */
+      amountSmallestUnits?: string;
     } | null>;
+  };
+  /**
+   * slice3-grant-execution (AD-6): the atomic ledger claim — the sole
+   * execution authority. Invoked for delegated-grant authorizations BEFORE
+   * the single-winner attempt claim; a rejection or error must close the
+   * path with no attempt claim and no broadcast. Replay returns the same
+   * budget claim; the broadcast still requires winning the attempt gate.
+   */
+  grantLedger?: {
+    claim(input: {
+      grantId: string;
+      userId: string;
+      amount: string;
+      idempotencyKey: string;
+    }): Promise<{ consumed: boolean; replay?: boolean; reason?: string }>;
   };
 };
 
@@ -432,48 +449,89 @@ export function createWalletConversationService(
       )) ?? workingSnapshot;
     const renewed = await renewContextIfSafe(updated);
     const visible = renewed ?? updated;
-    if (result.status === "confirmation_required") {
-      const pending = visible.pendingTransfer;
-      if (dependencies.grantGate && pending?.previewId) {
-        let decision: {
-          covered: boolean;
-          source?: "delegated_grant";
-          grantId?: string;
-        } | null = null;
-        try {
-          decision = await dependencies.grantGate.evaluate({
-            userId: input.userId,
-            conversationId: input.conversationId,
-            text: input.text,
-            language: visible.language,
-            pendingTransfer: {
-              network: pending.preview.network,
-              token: pending.preview.token,
-              recipient: pending.preview.recipient,
-              amount: pending.preview.amount,
-            },
-          });
-        } catch {
-          decision = null;
-        }
-        if (decision?.covered) {
-          for await (const gateEvent of resolveDecision({
-            conversationId: input.conversationId,
-            userId: input.userId,
-            previewId: pending.previewId,
-            decision: "confirm",
-            signal: input.signal,
-            authorizedBy: decision.source ?? "delegated_grant",
-            // The covered turn must resolve to its TERMINAL result in
-            // this turn: wait for the financial task instead of the
-            // generic "Transfer is being processed." answer.
-            waitForFinancialTask: true,
-          })) {
-            yield gateEvent;
+        if (result.status === "confirmation_required") {
+          const pending = visible.pendingTransfer;
+          if (dependencies.grantGate && pending?.previewId) {
+            let decision: {
+              covered: boolean;
+              source?: "delegated_grant";
+              grantId?: string;
+              amountSmallestUnits?: string;
+            } | null = null;
+            try {
+              decision = await dependencies.grantGate.evaluate({
+                userId: input.userId,
+                conversationId: input.conversationId,
+                text: input.text,
+                language: visible.language,
+                pendingTransfer: {
+                  network: pending.preview.network,
+                  token: pending.preview.token,
+                  recipient: pending.preview.recipient,
+                  amount: pending.preview.amount,
+                },
+              });
+            } catch {
+              decision = null;
+            }
+            if (decision?.covered) {
+              // AD-6 sequencing: the atomic ledger claim happens BEFORE the
+              // single-winner attempt claim. Missing authorization context,
+              // a missing ledger, a rejection, or any ledger error closes
+              // the delegated-grant path with NO attempt claim and NO
+              // broadcast (fail closed). A same-key replay returns the same
+              // budget claim but never authorizes a broadcast by itself —
+              // the broadcast still requires winning claimPendingTransfer.
+              const { grantId, amountSmallestUnits } = decision;
+              const ledger = dependencies.grantLedger;
+              if (
+                !ledger ||
+                typeof grantId !== "string" ||
+                grantId.length === 0 ||
+                typeof amountSmallestUnits !== "string" ||
+                !/^\d+$/.test(amountSmallestUnits)
+              ) {
+                decision = null; // fail closed → standard preview flow
+              } else {
+                let claim: {
+                  consumed: boolean;
+                  replay?: boolean;
+                  reason?: string;
+                } | null = null;
+                try {
+                  claim = await ledger.claim({
+                    grantId,
+                    userId: input.userId,
+                    amount: amountSmallestUnits,
+                    // Durable persisted attempt id (conversation_transfer_attempts.id).
+                    idempotencyKey: `grant-exec:${input.userId}:${pending.previewId}`,
+                  });
+                } catch {
+                  claim = null; // ledger error ⇒ fail closed
+                }
+                if (claim?.consumed !== true) {
+                  decision = null; // rejected claim ⇒ degrade to preview flow
+                }
+              }
+            }
+            if (decision?.covered) {
+              for await (const gateEvent of resolveDecision({
+                conversationId: input.conversationId,
+                userId: input.userId,
+                previewId: pending.previewId,
+                decision: "confirm",
+                signal: input.signal,
+                authorizedBy: decision.source ?? "delegated_grant",
+                // The covered turn must resolve to its TERMINAL result in
+                // this turn: wait for the financial task instead of the
+                // generic "Transfer is being processed." answer.
+                waitForFinancialTask: true,
+              })) {
+                yield gateEvent;
+              }
+              return;
+            }
           }
-          return;
-        }
-      }
       const withProgress = await setProgress(visible, {
         phase: "awaiting_confirmation",
         label: "Transfer preview ready for confirmation",
