@@ -37,6 +37,6 @@ Rollback: disable Solana voice routing and keep the existing strict preview gate
 
 ## 4. Delivery
 
-- [ ] 4.1 Commit by phase on branch `slice4-voice-confirmation`; push the verified branch.
-- [ ] 4.2 Open a reviewable PR against `slice3-grant-execution`; do not merge.
+- [x] 4.1 Commit by phase on branch `slice4-voice-confirmation`; push the verified branch.
+- [x] 4.2 Open reviewable PR #4 against `slice3-grant-execution`; do not merge.
 - [ ] 4.3 Record CI and Hermes test handoff, worktree/session receipt, and final verification.

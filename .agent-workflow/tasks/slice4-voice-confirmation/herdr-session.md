@@ -57,7 +57,8 @@ updated_at: 2026-10-05
 - Assigned scope: current-state research for Slice 4 voice confirmation outside a live delegated grant; do not implement before the SDD/design artifact is ready.
 - Durable result: research in `02-research.md`; SDD in `openspec/changes/slice4-voice-confirmation/`; Pi independent review PASS in `03-independent-review.md`.
 - Durable result: `openspec/changes/slice4-voice-confirmation/04-verification.md`; tests and implementation committed in `c596a4a` and `54af48d`.
-- Remaining work: push branch, open PR #4 against Slice 3, collect CI and Hermes DB-backed testing.
+- Delivery: pushed through `5075047`; PR #4 https://github.com/ram4-dev/colloseum-financial-assistant/pull/4 is open against `slice3-grant-execution`.
+- Remaining work: collect GitHub CI and Hermes DB-backed testing; no merge authorized.
 
 ## Verification
 
@@ -71,9 +72,9 @@ updated_at: 2026-10-05
 ## Cleanup and resumption
 
 - Results persisted before closure: yes, verification report and session receipt updated.
-- Closed tab IDs: none.
-- Post-close tab-list evidence: pending.
+- Closed tab IDs: none; existing Pi panes remain open for continuity.
+- Post-close tab-list evidence: not applicable (no panes closed).
 - Resume cwd: `/Users/ramiro/Desktop/projects/colloseum.slice4-voice-confirmation`.
 - Resume tab/pane: `w5:t2N` / `w5:p4M`.
 - Resume session value: `/Users/ramiro/.pi/agent/sessions/--Users-ramiro-Desktop-projects-colloseum.slice4-voice-confirmation--/2026-10-05T07-32-33-427Z_01a10afa-8813-7d28-8d43-2ccae4e3ee6b.jsonl`.
-- Resume status: implementation complete; source changes were completed in this worktree and Pi apply tabs were left intact for continuity.
+- Resume status: PR #4 is open, GitHub CI pending, Hermes DB-backed test pending; Pi apply tabs remain intact for continuity.
