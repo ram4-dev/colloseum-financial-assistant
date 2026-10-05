@@ -12,6 +12,7 @@ const ALLOWED_ADDRESS = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 const OTHER_ADDRESS = '0x1234567890123456789012345678901234567890';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEAD_ADDRESS = '0x000000000000000000000000000000000000dEaD';
+const SOLANA_RECIPIENT = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
 const config = { wallet: 'agent-demo', network: 'sepolia', token: 'usdt-test' };
 const toolOptions = {
   toolCallId: 'policy-test',
@@ -144,6 +145,50 @@ describe('live WDK transfer policy', () => {
       preview: true,
     });
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('applies the configured live maximum in SOL using exact decimal comparison', async () => {
+    process.env.WDK_MAX_TRANSFER_AMOUNT = '0.01';
+    process.env.WDK_ALLOWED_RECIPIENTS = SOLANA_RECIPIENT;
+    const session = createSession();
+    const base = createWdkToolsFixture();
+    const execute = vi.fn(base.send_token.execute!);
+    base.send_token.execute = execute;
+    const solanaConfig = { wallet: config.wallet, network: 'solana-devnet', token: 'SOL' };
+    const guarded = buildGuardedTools(base, session, undefined, solanaConfig);
+    const sendToken = guarded.send_token as Tool;
+    const solanaInput = input({
+      network: 'solana-devnet',
+      token: 'SOL',
+      to: SOLANA_RECIPIENT,
+      amount: '0.01',
+    });
+
+    await expect(sendToken.execute!(solanaInput, toolOptions)).resolves.toMatchObject({
+      preview: true,
+    });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a Solana amount above the configured live maximum before preview', async () => {
+    process.env.WDK_TOOLS_SOURCE = 'solana-devnet';
+    process.env.WDK_MAX_TRANSFER_AMOUNT = '0.01';
+    process.env.WDK_ALLOWED_RECIPIENTS = SOLANA_RECIPIENT;
+    const session = createSession();
+    const base = createWdkToolsFixture();
+    const execute = vi.fn(base.send_token.execute!);
+    base.send_token.execute = execute;
+    const solanaConfig = { wallet: config.wallet, network: 'solana-devnet', token: 'SOL' };
+    const guarded = buildGuardedTools(base, session, undefined, solanaConfig);
+    const sendToken = guarded.send_token as Tool;
+
+    await expect(sendToken.execute!(input({
+      network: 'solana-devnet',
+      token: 'SOL',
+      to: SOLANA_RECIPIENT,
+      amount: '0.010000001',
+    }), toolOptions)).resolves.toMatchObject({ error: 'policy_rejected' });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('rechecks policy before a matching confirmed broadcast', async () => {

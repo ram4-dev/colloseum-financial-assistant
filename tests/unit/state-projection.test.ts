@@ -57,4 +57,32 @@ describe("canonical conversation state projection", () => {
     expect(projection).toMatchObject({ activity: "uncertain", error: { code: "broadcast_uncertain" } });
     expect(projection).not.toHaveProperty("pendingTransfer");
   });
+
+  it("projects confirmed Solana devnet transactions to the devnet explorer", () => {
+    const hash = "5ZzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWMAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const projection = projectConversationState({
+      ...base,
+      lastTransactionHash: hash,
+      pendingTransfer: {
+        network: "solana-devnet",
+        token: "SOL",
+        to: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        amount: "0.01",
+        wallet: "privy-user",
+        preview: {
+          network: "solana-devnet",
+          token: "SOL",
+          recipient: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+          amount: "0.01",
+          estimatedFee: "0.000005 SOL",
+        },
+      },
+    });
+
+    expect(projection.transaction).toEqual({
+      network: "solana-devnet",
+      transactionHash: hash,
+      explorerUrl: `https://explorer.solana.com/tx/${hash}?cluster=devnet`,
+    });
+  });
 });

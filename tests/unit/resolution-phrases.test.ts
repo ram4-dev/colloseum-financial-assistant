@@ -6,6 +6,12 @@ describe('voice resolution phrases', () => {
     expect(isConfirmation('Sì, confirmo.')).toBe(true);
   });
 
+  it('accepts exact standalone yes in English and Spanish', () => {
+    expect(isConfirmation('yes')).toBe(true);
+    expect(isConfirmation('sí')).toBe(true);
+    expect(isConfirmation('si')).toBe(true);
+  });
+
   it('accepts common spoken confirmation variants without handing transfer authority to the model', () => {
     expect(isConfirmation('Sì, confirma.')).toBe(true);
     expect(isConfirmation('Sí, te lo confirmo.')).toBe(true);

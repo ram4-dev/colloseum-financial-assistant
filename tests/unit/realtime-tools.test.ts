@@ -19,6 +19,22 @@ vi.mock("@livekit/agents", () => ({
 import { createRealtimeTools } from "../../src/livekit/realtime-tools/index.js";
 import type { RealtimeSearchContactsResult, RealtimeVoiceToolResult } from "../../src/livekit/realtime-tools/index.js";
 import type { RecipientSearchResult } from "../../src/memory/service.js";
+import { createVoiceDecisionGate } from "../../src/livekit/voice-decision-gate.js";
+import { isCancellation, isConfirmation } from "../../src/livekit/resolution-phrases.js";
+
+function armedGate(decision: "confirm" | "cancel") {
+  const gate = createVoiceDecisionGate({ isConfirmation, isCancellation });
+  gate.prepare("preview-abc");
+  gate.completeNarration("preview-abc", { interrupted: false });
+  gate.recordTranscript({
+    previewId: "preview-abc",
+    text: decision === "confirm" ? "sí" : "cancelar",
+    isFinal: true,
+    authenticatedSpeaker: true,
+    createdAt: Date.now() + 1,
+  });
+  return gate;
+}
 
 type SearchContactsExecute = (input: { query: string }) => Promise<RealtimeSearchContactsResult>;
 
@@ -260,6 +276,16 @@ describe("createRealtimeTools", () => {
   });
 
   it("send_token delegates the preview to the service and strips the recipient address", async () => {
+    const recipientMemory = {
+      getRecipientForVersion: vi.fn().mockResolvedValue({
+        id: "c-1",
+        userId: "binding-user",
+        version: 2,
+        name: "Lucas",
+        description: "friend",
+        address: "0xsecret",
+      }),
+    };
     const service = {
       previewTransfer: vi.fn().mockResolvedValue({
 status: "confirmation_required",
@@ -267,11 +293,22 @@ message: "Preparé una transferencia de 10 USDT para Lucas. Confirmá para conti
 preview: { network: "sepolia", token: "USDT", recipient: "0xsecret", amount: "10", estimatedFee: "0.0003 ETH" },
       }),
     };
+    const conversations = {
+      get: vi.fn().mockResolvedValue({ pendingTransfer: {
+        previewId: "preview-abc", amount: "10", token: "USDT", network: "sepolia",
+      }, language: "es" }),
+    };
+    const voiceDecisionGate = createVoiceDecisionGate({ isConfirmation, isCancellation });
+    const speakPreview = vi.fn().mockResolvedValue({ interrupted: false });
     const tools = createRealtimeTools({
       conversationId: "conv-1",
       userId: "binding-user",
       wallet: {} as never,
       service,
+      recipientMemory: recipientMemory as never,
+      conversations: conversations as never,
+      voiceDecisionGate,
+      speakPreview,
     } as never);
     const sendToken = financialTool(tools[2], 2);
 
@@ -284,11 +321,23 @@ preview: { network: "sepolia", token: "USDT", recipient: "0xsecret", amount: "10
       recipientId: "c-1",
       recipientVersion: 2,
     }));
+    expect(recipientMemory.getRecipientForVersion).toHaveBeenCalledWith(
+      "binding-user",
+      "c-1",
+      2,
+    );
     expect(result.status).toBe("confirmation_required");
     expect(result.amount).toBe("10");
     expect(result.token).toBe("USDT");
+    expect(result).toMatchObject({
+      recipientName: "Lucas",
+      estimatedFee: "0.0003 ETH",
+    });
     expect(result).not.toHaveProperty("recipient");
     expect(result).not.toHaveProperty("address");
+    expect(speakPreview).toHaveBeenCalledWith(expect.stringContaining("Comisión estimada: 0.0003 ETH"));
+    voiceDecisionGate.recordTranscript({ previewId: "preview-abc", text: "sí", isFinal: true, authenticatedSpeaker: true, createdAt: Date.now() + 1 });
+    expect(voiceDecisionGate.consume("preview-abc", "confirm")).toBe("confirmed");
   });
 
   it("confirm_transfer reads the current preview and delegates to resolveDecision (V1)", async () => {
@@ -300,12 +349,14 @@ preview: { network: "sepolia", token: "USDT", recipient: "0xsecret", amount: "10
 yield { type: "turn-completed", result: { status: "sent", message: "Transfer confirmed.", transaction: { transactionHash: "0xabc" } } };
       }),
     };
+    const voiceDecisionGate = armedGate("confirm");
     const tools = createRealtimeTools({
       conversationId: "conv-1",
       userId: "binding-user",
       wallet: {} as never,
       conversations,
       service,
+      voiceDecisionGate,
     } as never);
     const confirm = financialTool(tools[3], 3);
 
@@ -347,12 +398,14 @@ yield { type: "turn-completed", result: { status: "sent", message: "Transfer con
 yield { type: "turn-completed", result: { status: "cancelled", message: "Transfer cancelled." } };
       }),
     };
+    const voiceDecisionGate = armedGate("cancel");
     const tools = createRealtimeTools({
       conversationId: "conv-1",
       userId: "binding-user",
       wallet: {} as never,
       conversations,
       service,
+      voiceDecisionGate,
     } as never);
     const cancel = financialTool(tools[4], 4);
 

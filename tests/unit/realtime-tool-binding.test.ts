@@ -9,6 +9,8 @@ import {
 } from '../../evals/voice/realtime/eval-fixtures.js';
 import { createRealtimeToolBinding } from '../../evals/voice/realtime/tool-binding.js';
 import type { WalletProvider } from '../../src/wallet/provider.js';
+import { createVoiceDecisionGate } from '../../src/livekit/voice-decision-gate.js';
+import { isCancellation, isConfirmation } from '../../src/livekit/resolution-phrases.js';
 
 const envBackup = new Map<string, string | undefined>();
 const EVAL_ENV: Record<string, string> = {
@@ -129,6 +131,9 @@ describe('realtime tool binding — production execution against the fixture sta
 
   it('send_token previews (no broadcast) and confirm_transfer broadcasts through the fixture spy', async () => {
     const stack = createRealtimeFixtureStack();
+    const voiceDecisionGate = createVoiceDecisionGate({ isConfirmation, isCancellation });
+    stack.deps.voiceDecisionGate = voiceDecisionGate;
+    stack.deps.speakPreview = async () => ({ interrupted: false });
     const binding = createRealtimeToolBinding(stack.deps);
 
     const preview = await binding.executeFunctionCall(
@@ -140,6 +145,13 @@ describe('realtime tool binding — production execution against the fixture sta
     );
     expect(JSON.parse(preview.output)).toMatchObject({ status: 'confirmation_required' });
     expect(stack.broadcastCalls).toHaveLength(0);
+    voiceDecisionGate.recordTranscript({
+      previewId: 'current-preview',
+      text: 'sí confirmo',
+      isFinal: true,
+      authenticatedSpeaker: true,
+      createdAt: Date.now() + 1,
+    });
 
     const confirm = await binding.executeFunctionCall(call('confirm_transfer', {}));
     expect(confirm.output).toBeTruthy();
