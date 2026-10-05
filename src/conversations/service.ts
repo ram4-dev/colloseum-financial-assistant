@@ -73,6 +73,13 @@ export type ResolveDecisionInput = {
   decision: "confirm" | "cancel";
   signal?: AbortSignal;
   waitForFinancialTask?: boolean;
+  /**
+   * slice3-grant-execution: internal authorization source. Default "user"
+   * (explicit user confirm/cancel); "delegated_grant" marks a grant-covered
+   * execution resolved by the server gate, so no fabricated user "confirm"
+   * message is appended and narration/audit stay accurate.
+   */
+  authorizedBy?: "user" | "delegated_grant";
 };
 
 export type PreviewTransferInput = {
@@ -124,7 +131,12 @@ export type ConversationEvent =
       id: string;
       text: string;
       reason:
-        "started" | "delayed" | "decision" | "result" | "answer" | "uncertain";
+        | "started"
+        | "delayed"
+        | "decision"
+        | "result"
+        | "answer"
+        | "uncertain";
     }
   | { type: "turn-completed"; result: ConversationTurnResult };
 
@@ -172,6 +184,24 @@ export type WalletConversationDependencies = {
     budget: ContextBudget;
     estimateTokens(snapshot: ConversationSnapshot): number;
     summarize(snapshot: ConversationSnapshot): Promise<unknown>;
+  };
+  grantGate?: {
+    evaluate(input: {
+      userId: string;
+      conversationId: string;
+      text: string;
+      language: string;
+      pendingTransfer: {
+        network: string;
+        token: string;
+        recipient: string;
+        amount: string;
+      };
+    }): Promise<{
+      covered: boolean;
+      source?: "delegated_grant";
+      grantId?: string;
+    } | null>;
   };
 };
 
@@ -403,6 +433,47 @@ export function createWalletConversationService(
     const renewed = await renewContextIfSafe(updated);
     const visible = renewed ?? updated;
     if (result.status === "confirmation_required") {
+      const pending = visible.pendingTransfer;
+      if (dependencies.grantGate && pending?.previewId) {
+        let decision: {
+          covered: boolean;
+          source?: "delegated_grant";
+          grantId?: string;
+        } | null = null;
+        try {
+          decision = await dependencies.grantGate.evaluate({
+            userId: input.userId,
+            conversationId: input.conversationId,
+            text: input.text,
+            language: visible.language,
+            pendingTransfer: {
+              network: pending.preview.network,
+              token: pending.preview.token,
+              recipient: pending.preview.recipient,
+              amount: pending.preview.amount,
+            },
+          });
+        } catch {
+          decision = null;
+        }
+        if (decision?.covered) {
+          for await (const gateEvent of resolveDecision({
+            conversationId: input.conversationId,
+            userId: input.userId,
+            previewId: pending.previewId,
+            decision: "confirm",
+            signal: input.signal,
+            authorizedBy: decision.source ?? "delegated_grant",
+            // The covered turn must resolve to its TERMINAL result in
+            // this turn: wait for the financial task instead of the
+            // generic "Transfer is being processed." answer.
+            waitForFinancialTask: true,
+          })) {
+            yield gateEvent;
+          }
+          return;
+        }
+      }
       const withProgress = await setProgress(visible, {
         phase: "awaiting_confirmation",
         label: "Transfer preview ready for confirmation",
@@ -529,13 +600,18 @@ export function createWalletConversationService(
       return;
     }
 
-    await appendConversationMessage(
-      snapshot,
-      input.userId,
-      "user",
-      input.decision,
-      dependencies.conversations,
-    );
+    // slice3-grant-execution: a grant-covered execution resolved by the
+    // server gate appends NO fabricated user "confirm" message — the
+    // user's original request plus the active grant is the authorization.
+    if (input.authorizedBy !== "delegated_grant") {
+      await appendConversationMessage(
+        snapshot,
+        input.userId,
+        "user",
+        input.decision,
+        dependencies.conversations,
+      );
+    }
     const claimed = claim.transfer;
     const run = async (): Promise<void> => {
       await runFinancialTransfer({ ...input, claimed, snapshot });
@@ -712,7 +788,12 @@ export function createWalletConversationService(
   async function* emitSpoken(
     text: string,
     reason:
-      "started" | "delayed" | "decision" | "result" | "answer" | "uncertain",
+      | "started"
+      | "delayed"
+      | "decision"
+      | "result"
+      | "answer"
+      | "uncertain",
   ): AsyncIterable<ConversationEvent> {
     const input = { reason, text };
     if (!narration.shouldNarrate(input)) return;
@@ -970,7 +1051,12 @@ export function createWalletConversationService(
   async function publishSpoken(
     text: string,
     reason:
-      "started" | "delayed" | "decision" | "result" | "answer" | "uncertain",
+      | "started"
+      | "delayed"
+      | "decision"
+      | "result"
+      | "answer"
+      | "uncertain",
   ): Promise<void> {
     const input = { reason, text };
     if (!narration.shouldNarrate(input)) return;
@@ -1328,12 +1414,14 @@ function spokenResultMessage(
 function errorResult(
   error: unknown,
 ): Extract<ConversationTurnResult, { status: "error" }> {
-  if (!(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    typeof error.code === "string"
-  )) {
+  if (
+    !(
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string"
+    )
+  ) {
     // Unexpected failures must be visible in the process log; the generic
     // internal_error response alone made live diagnostics impossible.
     console.error(
@@ -1387,10 +1475,10 @@ function sanitizeResult(
 function isToolError(output: unknown): output is Record<string, unknown> {
   return Boolean(
     output &&
-    typeof output === "object" &&
-    !Array.isArray(output) &&
-    typeof (output as { error?: unknown }).error === "string" &&
-    typeof (output as { message?: unknown }).message === "string",
+      typeof output === "object" &&
+      !Array.isArray(output) &&
+      typeof (output as { error?: unknown }).error === "string" &&
+      typeof (output as { message?: unknown }).message === "string",
   );
 }
 
@@ -1435,10 +1523,10 @@ async function isClaimedRecipientValid(
   );
   return Boolean(
     current &&
-    current.id === transfer.recipientId &&
-    current.version === transfer.recipientVersion &&
-    isValidEvmAddress(current.address) &&
-    current.address === transfer.to,
+      current.id === transfer.recipientId &&
+      current.version === transfer.recipientVersion &&
+      isValidEvmAddress(current.address) &&
+      current.address === transfer.to,
   );
 }
 

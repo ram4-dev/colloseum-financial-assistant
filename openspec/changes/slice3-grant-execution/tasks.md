@@ -26,9 +26,9 @@ PR #3 stacks on `origin/slice2-provider-solana-devnet` until PR #2 merges. Herme
 
 ## Phase 3 — Conversation RED/GREEN
 
-- [ ] 3.1 RED service tests: covered request returns `sent` without confirmation; ineligible request uses existing preview-confirm flow and honest copy.
-- [ ] 3.2 Add optional grant/converter dependencies to `src/conversations/service.ts`; absence preserves current behavior; wire in `src/server.ts`.
-- [ ] 3.3 Reuse `runFinancialTransfer`; expose no reason code; assert HTTP contract parity (`src/contracts/http.ts` and frontend `api-types.ts`).
+- [x] 3.1 RED service tests: covered request returns `sent` without confirmation; ineligible request uses existing preview-confirm flow and honest copy.
+- [x] 3.2 Add optional grant/converter dependencies to `src/conversations/service.ts`; absence preserves current behavior; wire in `src/server.ts`.
+- [x] 3.3 Reuse `runFinancialTransfer`; expose no reason code; assert HTTP contract parity (`src/contracts/http.ts` and frontend `api-types.ts`).
 
 ## Phase 4 — Atomic claim RED/GREEN
 

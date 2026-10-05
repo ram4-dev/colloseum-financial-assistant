@@ -42,3 +42,56 @@ Tests  no tests
 ### Next
 
 Phase 3 — conversation service gate RED/GREEN (covered ⇒ `sent` without confirmation; degraded ⇒ preview + copy; optional deps wiring; contract zero-delta assertion).
+
+## Phase 3 — Conversation gate (completed 2026-10-05)
+
+### RED evidence (before service wiring)
+
+`vitest run tests/unit/conversation-grant-gate.test.ts` — covered case failed with
+`expected 'confirmation_required' to be 'sent'` while both controls (degraded gate,
+absent dependency) passed with `confirmation_required` — an invalid-RED round was
+corrected first: pre-seeded pending transfer and wrong network/token fixture made
+all 3 cases fail with generic `error`; fixture repaired to the existing EVM USDT
+baseline so only the covered case failed for the intended missing behavior.
+
+### GREEN evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Focused suites (gate + service + factory + classifier + engine) | `vitest run` (5 files) | **71/71** |
+| Full unit gate suite | grant-gate file | 4/4 (covered, financial-task terminal `sent`, degraded, absent-dep) |
+| Typecheck | `npm run typecheck` | 0 errors |
+| Lint | `npm run lint` | clean |
+| Whitespace | `git diff --check` | exit 0 |
+
+### Implementation
+
+- `src/conversations/service.ts`: optional `grantGate` dependency; consulted ONLY in
+  `handleTurnStream` after a fresh `confirmation_required` preview — never from
+  `persistNativePreview`/`previewTransfer` (model-tool paths; regression-asserted).
+  Covered ⇒ internal `resolveDecision({decision:"confirm", authorizedBy:"delegated_grant",
+  waitForFinancialTask:true})` reusing the single-winner attempt claim +
+  `runFinancialTransfer`; terminal `sent` returned in-turn. `authorizedBy:"delegated_grant"`
+  skips the fabricated user "confirm" message (asserted). Gate absence/exception ⇒ null ⇒
+  unchanged flow (fail closed).
+- `src/conversations/grant-gate.ts` (new): concrete factory gate — parses the original text
+  server-side, requires exact action/amount/token/recipient match against the server-owned
+  pending preview (model cannot alter amount/destination), resolves wallet via
+  `DelegatedGrantService.resolveWalletId(userId,"solana")` (D-2), decimals via
+  `provider.listTokens("solana-devnet")`, classifies via `classifyGrantCoverage`. No
+  consumption reads (AD-2); every error/mismatch ⇒ null (fail closed); injected clock.
+- `src/server.ts`: gate wired in the database block only when `walletForUser` exists;
+  absent seam ⇒ no gate ⇒ today's behavior.
+- Contract: zero HTTP contract delta (existing `sent` shape reused); `api-types.ts` mirror
+  untouched — mirror obligation remains the phase-6 no-op assertion.
+
+### Tests added
+
+`tests/unit/conversation-grant-gate.test.ts` (4), `tests/unit/grant-gate-factory.test.ts` (8:
+exact hit, unknown token, amount mismatch, recipient mismatch, ambiguous intent, unsupported
+network, no candidates, ledger failure).
+
+### Next
+
+Phase 4 — atomic claim integration (DB): claimConsumption authority, races, replay two-gate
+semantics, revoke/expiry between preview and execution, window rejection.
