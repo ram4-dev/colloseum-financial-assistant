@@ -402,8 +402,15 @@ export class SolanaDevnetProvider implements WalletProvider {
     request: TransferRequest,
   ): Promise<BroadcastOutcome> {
     assertDevnetNetwork(request.network);
+    // AD-11: fail closed on missing/blank preview identity — a persisted
+    // previewId is the dispatch reference and reconciliation identity. No
+    // timestamp/random fallback: an unpersisted reference would break
+    // reconciliation and could double-spend on retry.
     if (!request.previewId?.trim()) {
-      return { kind: "not_dispatched", reason: "A persisted preview ID is required before signing." };
+      return {
+        kind: "not_dispatched",
+        reason: "A persisted preview ID is required before signing.",
+      };
     }
     this.assertRecipient(request.to);
     const lamports = this.amountToLamports(request.amount);

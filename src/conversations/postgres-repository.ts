@@ -367,10 +367,10 @@ export class PostgresConversationRepository implements ConversationRepository {
     previewId?: string,
   ): Promise<PendingTransferClaim> {
     return this.database.withUserTransaction(userId, async (client) => {
-      const claimed = await client.query<TransferRow>(
+      const claimed = await client.query<TransferRow & { claim_id: string | null }>(
         `UPDATE conversation_transfer_attempts SET status = 'broadcasting', claim_id = extensions.gen_random_uuid(), claimed_at = now(), updated_at = now()
         WHERE conversation_id = $1 AND user_id = $2 AND status = 'previewed' ${previewId ? "AND id = $3" : ""}
-        RETURNING id, status, pending_transfer`,
+        RETURNING id, status, claim_id, pending_transfer`,
         previewId
           ? [conversationId, userId, previewId]
           : [conversationId, userId],
@@ -382,6 +382,7 @@ export class PostgresConversationRepository implements ConversationRepository {
         );
         return {
           status: "claimed",
+          claimId: claimed.rows[0].claim_id!,
           transfer: {
             ...claimed.rows[0].pending_transfer,
             previewId: claimed.rows[0].id,

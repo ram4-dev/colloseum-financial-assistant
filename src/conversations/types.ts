@@ -64,5 +64,5 @@ export type ConversationSnapshot = Conversation & ConversationState & {
 };
 
 export type PendingTransferClaim =
-  | { status: 'claimed'; transfer: PendingTransfer & { previewId: string } }
+  | { status: 'claimed'; transfer: PendingTransfer & { previewId: string }; claimId: string }
   | { status: 'missing' | 'broadcasting' | 'uncertain' };

@@ -252,3 +252,262 @@ two `users-db` sentinel tests (missing `DEMO_USER_ID`), one durable
 and two `api-contacts` timeouts. The four-file baseline subset on `origin/main`
 also reports 6 failed / 10 passed. The delegated-grant database tests remain
 green in isolation (5 files / 35 passed).
+
+### Phase 8 RED execution (2026-10-05, tests only — NO production code/migrations)
+
+New file: `tests/integration/grant-claim-release.test.ts` (11 RED tests, real
+Postgres :55501, DATABASE_URL env only; real `DelegatedGrantService`, real
+`PostgresConversationRepository`, real `grant_claim_ledger`/`grant_audit_log`/
+`conversation_transfer_attempts` rows — atomicity is NOT mock-tested).
+
+### RED evidence (vitest --reporter=verbose, /tmp/phase8-red-v7.log preserved
+
+as `.agent-workflow/tasks/slice3-grant-execution/phase8-red-vitest.log`)
+
+Result: **1 file, 11 tests, 11 failed — ALL feature-level** (assertions by
+absence of schema/API/branch). Zero fixture/env/DB/import failures after three
+harness iterations (per-test user+wallet+grant to respect the one-active-wallet
+per user/chain unique index; per-test conversation for the one-active-transfer
+index; documented early-return RED guards on missing APIs so no TypeError
+masks the assertion).
+
+Grouped failure causes (each RED by missing behavior):
+
+1. **Schema missing (migration 012):** 8.1 — `expected ['id','grant_id',…] to
+   include 'released_at'` (columns absent; `released` audit CHECK absent;
+   RLS/UPDATE-grant assertions pending the migration).
+2. **Tx-only ledger API missing:** 8.2 (x2) and 8.3 —
+   `expected 'undefined' to be 'function'` on
+   `releaseReservationInTransaction` (guarded, documented early return).
+3. **claim_id seam missing:** 8.4b real-repository test — `expected undefined
+   to be 'f3c0bb42…'`: the REAL `PostgresConversationRepository.claimPendingTransfer`
+   CAS persists and mints `claim_id` in the DB (re-read proves
+   `broadcasting` + non-null token) but `PendingTransferClaim` does not return
+   it to the winner.
+4. **Settlement API missing:** 8.2b and 8.4b (x3) — guarded absence of
+   `settleGrantReservation` (atomic CAS+release+audit; cannot be mock-tested).
+5. **Service settle branch missing:** 8.4 (x2) — the flow REACHES
+   `attempt:broadcasting` (owned state proven via events; provider
+   `not_dispatched` spy-proven awaited `kind`), then the CURRENT code runs the
+   legacy `releasePendingTransferClaim` broadcasting→previewed reset and never
+   releases the grant claim: `expected false to be true` on the `settle:`
+   event assertion.
+
+### Checks (this phase, test code only)
+
+| Check | Result |
+| --- | --- |
+| `tsc --noEmit -p tsconfig.test.json` | 0 errors |
+| `eslint tests/integration/grant-claim-release.test.ts --max-warnings=0` | clean |
+| `git diff --check` | exit 0 |
+| Focused RED suite | 1 file / 11 tests / 11 failed (all feature-level) |
+| Production diff | none (no src/, no migrations touched) |
+
+Semantics NOT claimed verified until GREEN. Harness notes: wallet/conversation
+fixtures isolated per test (unique indexes honored, none disabled);
+`insertAttempt` provisions a real conversation row (FK); deterministic runtime
+env restored in afterEach; preflight rejection engineered by flipping
+`WDK_TOOLS_SOURCE=live` AFTER previewTransfer succeeds (real
+`validateWalletTransferPolicy` rejection in `runFinancialTransfer`).
+
+## Reservation-release amendment (2026-10-05, planning only — no implementation)
+
+**Binding user decision:** when a valid grant claim is followed by an
+attempt/preflight failure with no transaction dispatched, release the reserved
+budget with compensating audit; retain it for `submitted`, `uncertain`, or
+`broadcast_in_progress`.
+
+### Model (AD-6/AD-10; spec requirement "Reserved budget release on definitive no-dispatch")
+
+- Claims in `grant_claim_ledger` are RESERVATIONS from persist until dispatch
+  certainty; `released_at`/`released_reason` (migration `012` + Supabase mirror
+  `20260901001100`, additive; `released` added to the audit event CHECK; forced
+  RLS unchanged) mark release; BOTH window sums (claim authoritative total AND
+  engine `consumedInWindow` prefilter) are explicitly REWRITTEN to sum UNRELEASED
+  `grant_claim_ledger` rows, so released budget actually returns to the rolling
+  window (additive columns alone cannot free budget — both queries read
+  `grant_audit_log` today).
+- Release points: definitive `not_dispatched` (service.ts:985 branch) and
+  preflight policy/recipient rejection — BOTH settle from the OWNED
+  `broadcasting` state `runFinancialTransfer` enters with (claim won first,
+  then validation, then broadcast), and the ONLY release authority is the
+  EXACT-OWNER compare-and-set `broadcasting → cancelled` (id + status +
+  `claim_id` all match) inside the settlement transaction; a lost/absent CAS,
+  an absent row, an already-`cancelled` status, or ambiguous ownership NEVER
+  release standalone — they retain; no `previewed → cancelled` path exists
+  for these settles. Retain on EVERY dispatched/uncertain state
+  (`broadcasting` unowned, `submitted`, `uncertain`, `confirmed`, `reverted`,
+  `receipt_invalid`; incl. the provider-exception mapping to `uncertain`) and
+  whenever winner ownership is indistinguishable from an in-flight dispatch — a
+  concurrent winner may be broadcasting under the same reservation.
+- Idempotent locked release keyed by grant + idempotency key: same per-grant
+  advisory lock, same user-scoped transaction, one `released` audit row max,
+  original timestamp/reason preserved on re-release; a replayed live claim is
+  never released by the replay path itself.
+- Retry contract (NO re-activation — the version-token reactivation design was
+  REJECTED for lifecycle races): the settlement marks the old attempt terminal
+  `cancelled` and releases the budget IN THE SAME atomic transaction (all
+  three effects commit together or all roll back — no partial commits); a
+  released same-key replay FAILS CLOSED (never `consumed`, never authorizing a
+  broadcast); a retry requires a FRESH persisted `previewId` — fresh
+  idempotency key and a fresh reservation claimed under full grant/window/cap
+  checks; provider reference identity stays verbatim-stable only for retained
+  outcomes (`submitted`/`uncertain` reconcile by reference).
+
+### Provider previewId guard remediation (HIGH PR #3, planning only — no implementation)
+
+- Restores the fail-closed `previewId` guard in
+  `src/wallet/solana-devnet-provider.ts` (`broadcastTransfer`): missing/empty/
+  whitespace preview id ⇒ `not_dispatched` BEFORE `getRecentBlockhash` and BEFORE
+  `signAndSend`; no timestamp/random fallback; valid id used verbatim (retry
+  identity preserved). Matches slice2 commit `e39dbad`.
+- Tracked as tasks Phase 8.7 (RED-first, tests in
+  `tests/unit/solana-devnet-provider.test.ts`) and spec requirement "Persisted
+  preview identity guards provider dispatch" (2 scenarios); design AD-11.
+- E2E verification per AGENTS.md tracked as Phase 8.8 (focused unit + DB suites,
+  `npm test`/typecheck/lint, covered-path E2E fixtures).
+- Budget claim/refund semantics remain governed by AD-10, not by this guard.
+
+### Atomic settlement with claim ownership token (final review blockers, planning only)
+
+- **One atomic user-scoped settlement transaction** per settle: attempt
+  cancellation + ledger release + compensating `released` audit, all under the
+  per-grant advisory lock inside the user transaction. No partial persistence:
+  any failure rolls back attempt cancellation AND ledger/audit together.
+- **Ownership token:** the existing `claimPendingTransfer` winner already
+  persists `claim_id` (migration 002, UUID) on the attempt row; the claim result
+  now RETURNS it and the service carries it to settle. For a definitive provider
+  `not_dispatched`, settle performs a compare-and-set on the EXACT attempt row:
+  `broadcasting → cancelled` WHERE id, status = `broadcasting`, AND
+  `claim_id` = the winner's token all match; only on CAS success does the SAME
+  transaction mark the exact grant/idempotency claim released and insert the
+  `released` audit row. If the CAS loses (wrong/stale claim_id, status moved),
+  NOTHING is released and budget is retained.
+- **Preflight rejection** (policy/recipient): settles from the SAME owned
+  `broadcasting` state via the same owner-token `broadcasting → cancelled` CAS
+  - ledger release/audit in the same transaction; any part failing rolls back
+  everything.
+- **Replaces `releasePendingTransferClaim`:** the existing broadcasting-to-
+  previewed reset is removed — a released attempt is never re-opened. If the
+  attempt row or claim ownership is absent or ambiguous, the settlement RETAINS
+  the reservation rather than releasing.
+- **API/task/test seam:** `claimPendingTransfer` winner result carries `claim_id`;
+  the settle path threads it through the service to the repository settlement;
+  RED cases: exact-owner broadcasting→cancelled+release atomically; wrong/stale
+  claim_id cannot cancel or release; race winner retains; injected failure rolls
+  back both cancellation and ledger/audit; pre-broadcast CAS cancellation+release;
+  ambiguity retains.
+
+### Scenario-count reconciliation
+
+The pre-amendment baseline was 47 scenarios (git HEAD), not 45 as the binding
+headers previously stated: the header count had drifted before this amendment.
+Final arithmetic: 47 baseline + 12 reservation-release scenarios + 2
+provider-guard scenarios = 61; binding headers (tasks.md, design.md, state.yaml)
+now state 61 / 12.
+
+The 12 release scenarios enumerate as: (1) definitive no-dispatch cancels the
+attempt and releases atomically; (2) a released key fails closed and never
+authorizes a broadcast; (3) a fresh preview claims normally after an unrelated
+release; (4) released budget returns to the rolling window in BOTH sums; (5)
+proven pre-dispatch blocks release — every dispatched/uncertain state retains;
+(6) the settlement is one atomic transaction gated by the claim ownership token;
+(7) a wrong or stale claim_id cannot cancel or release; (8) ambiguous ownership
+retains rather than releases; (9) a preflight rejection cancels and releases
+from the owned broadcasting state; (10) a concurrent attempt winner never has
+its reservation released; (11) submitted or uncertain outcomes retain the
+reservation; (12) release is idempotent and locked.
+
+The "submitted or uncertain outcomes retain" and "proven pre-dispatch vs
+dispatched/uncertain states" scenarios were kept as INDEPENDENT acceptance
+scenarios (not merged) per review. Status semantics: settlements originate
+in `runFinancialTransfer` with the attempt ALREADY `broadcasting` under the
+winner's `claim_id`; the ONLY release authority is the successful exact-owner
+`broadcasting → cancelled` CAS in the settlement transaction — an absent row,
+already-`cancelled`, ambiguous ownership, or lost CAS retains, and no
+`previewed → cancelled` release path exists.
+
+### Plan
+
+- Tasks Phase 8.1–8.8 (all unchecked; RED-first: 8.1 migration, 8.2 ledger
+  `releaseReservationInTransaction` (tx-only), 8.2b atomic all-or-nothing
+  settlement, 8.3 window accounting, 8.4 service settle wiring;
+  8.5 implementation AFTER RED; 8.6 GREEN evidence; 8.7 provider guard RED-first;
+  8.8 E2E verification per AGENTS.md).
+- Budget claim/refund semantics from the earlier HIGH PR #3 review finding are
+  NOT yet implemented — the pending consequence question was answered by this
+  decision; Phase 8 implementation is the next bounded Strict-TDD batch.
+- The solana-devnet `previewId` fail-closed guard restoration (HIGH PR #3) is
+  planned in this amendment as Phase 8.7 (AD-11); its implementation also
+  awaits RED evidence, in the same bounded batch or a separate one.
+
+## Phase 8 GREEN + AD-11 guard (2026-10-05, implementation complete)
+
+### Implementation (after recorded RED evidence)
+
+- Migration `012_grant_claim_release.sql` + Supabase mirror
+  `20260901001100_grant_claim_release.sql`: released_at/released_reason, `released`
+  audit CHECK, UPDATE grant — applied to :55501 (8.1 green).
+- Ledger `DelegatedGrantService`: tx-only `releaseReservationInTransaction`
+  (single release-semantics implementation; failAfter:'ledger' hook INSIDE it,
+  after the exact-row UPDATE and BEFORE the audit INSERT);
+  `settleGrantReservation` = ONE `withUserTransaction` + per-grant advisory
+  lock: exact-owner CAS `broadcasting→cancelled` (id+conversation+user+status+
+  claim_id) → tx-only release → audit; `failAfter:'audit'` after return; lost
+  CAS/absent/already-cancelled ⇒ bare return (retain, no release, no mutation).
+- Replay fail-closed: a RELEASED key returns `consumed:false, replay:false,
+  reason:'reservation_released'` (audited) — never `consumed:true`.
+- Window sums REWRITTEN to unreleased `grant_claim_ledger` rows in BOTH paths
+  (claim total + module `consumedInWindow`).
+- Repository seam: `PendingTransferClaim` (types.ts) `claimed` variant carries
+  `claimId`; `PostgresConversationRepository.claimPendingTransfer` UPDATE
+  RETURNING includes the minted `claim_id`. session-state in-memory variant
+  unchanged (no DB token there).
+- Service wiring: `runFinancialTransfer` gains `claimId/claimedGrantId/
+  authorizedBy`; settlement invoked ONLY when
+  `authorizedBy==='delegated_grant'` AND claimId AND claimedGrantId AND
+  `grantLedger.settle` exist — identity key `grant-exec:{userId}:{previewId}`,
+  no empty-identity fallback (fail closed, retain). Replaces the legacy
+  broadcasting→previewed reset on BOTH branches (preflight rejection with
+  reason `policy_rejected`/`recipient_revalidation_required`; provider
+  `not_dispatched` with reason `not_dispatched`), then `clearPendingTransfer`
+  (retry requires a FRESH persisted preview; the cancelled attempt is never
+  re-opened). `releasePendingTransferClaim` is PRESERVED only for the
+  explicit-user retry path (`authorizedBy !== 'delegated_grant'`), per Ramiro's
+  preserved-behavior instruction. `src/server.ts` wires `grantLedger.settle →
+  grants.settleGrantReservation`.
+- AD-11 (8.7): Solana provider `broadcastTransfer` fails closed on
+  missing/empty/whitespace `previewId` with `not_dispatched` BEFORE
+  `requireRecentBlockhash` and BEFORE `signAndSend`; no `sol-${now()}` fallback;
+  valid `previewId` used verbatim as the dispatch reference.
+
+### GREEN evidence (real Postgres :55501; DATABASE_URL required)
+
+| Suite | Result |
+| --- | --- |
+| `grant-claim-release.test.ts` (11: schema, tx-only release, replay fail-closed, real-repo claimId, 3-boundary rollback w/ DB re-read, exact-owner CAS, stale claim_id retention, absent/cancelled retention, service preflight + not_dispatched settle, window sums) | 11/11 |
+| `delegated-grants-consumption.test.ts` (fixtures updated to AD-10 semantics: real held reservations; window sum proven bidirectional — release stops counting; concurrent cap seeded from a real 4M held reservation) | 14/14 |
+| `solana-devnet-provider.test.ts` (AD-11 RED→GREEN: 3-case fail-closed before both seams; verbatim reference) | 11/11 |
+| E2E `grant-gate-entries.e2e.test.ts` + `grant-gate-model-origin.e2e.test.ts` | 3/3 |
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | exit 0 |
+| `npm run build` | exit 0 |
+| `npm run lint` (src+tests, --max-warnings=0) | exit 0 |
+| `git diff --check` | exit 0 |
+
+Notes: two `delegated-grants-consumption` failures surfaced by the full-suite
+run were fixtures reading the OLD audit-row window sums — fixed to seed real
+ledger reservations (that was the point of the AD-10 change). `settleGrantReservation`
+failAfter is TEST-ONLY. `eval-fixtures.ts` claimId placeholder + unused-import
+removal compile the shared contract; two remaining unused-param lints there are
+pre-existing at HEAD.
+
+Full-suite follow-up after those fixture fixes: `npm test` completed with 842
+passed, 29 failed, 10 skipped (130 files: 116 passed, 10 failed, 4 skipped).
+The failures include unrelated database-backed contact/conversation/user tests
+timing out at their configured 5s/60s limits and the demo sentinel failing
+because `DEMO_USER_ID` is unset. All Slice 3 grant consumption/settlement and
+provider suites, plus the covered-path grant-gate E2E fixtures, pass separately
+as recorded above; the full suite remains a CI/environment blocker to report.

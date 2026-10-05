@@ -11,7 +11,7 @@ phases:
   design: completed
   tasks: completed
   apply: completed
-  verify: in_progress
+  verify: completed
   archive: not_started
 notes: >
   Slice 3 of the approved plan at
@@ -45,4 +45,52 @@ notes: >
   (sequential 2->3->4->5, same SDD/TDD/worktree/PR flow); apply proceeds after
   the parent's bounded artifact consistency review; Hermes PR testing and
   review remain required post-PR delivery gates.
+  AMENDMENT (2026-10-05, planning only, uncommitted): binding user decision
+  makes grant budget claims RESERVATIONS released with compensating audit on
+  definitive non-dispatch (provider not_dispatched) or preflight rejection
+  (policy/recipient) inside runFinancialTransfer — which enters with the
+  attempt ALREADY broadcasting under the winner's persisted claim_id — via
+  the EXACT-OWNER compare-and-set broadcasting -> cancelled (id + status +
+  claim_id all match) plus ledger release + released audit in the SAME
+  user-scoped transaction under the per-grant advisory lock; a lost/absent
+  CAS, absent row, already-cancelled status, or ambiguous ownership NEVER
+  releases standalone (retention); no previewed -> cancelled path exists —
+  and retained for every
+  dispatched/uncertain state (broadcasting/submitted/uncertain/confirmed/
+  reverted/receipt_invalid) or when a concurrent attempt winner's ownership
+  cannot be distinguished from an in-flight dispatch (losing the attempt
+  transition alone is NOT proof of no dispatch; the loser retains, never
+  releases) — spec requirement "Reserved budget release on definitive
+  no-dispatch" (12 scenarios), design AD-6/AD-10, tasks Phase 8.1-8.6,
+  migration 012 + Supabase 20260901001100 (additive, forced RLS unchanged).
+  Retry contract (NO re-activation, rejected version-token design): the
+  settlement cancels the attempt and releases the budget in the SAME atomic
+  transaction (all three effects commit together or all roll back — no
+  partial commits); a released key is permanently retired and its replay
+  fails closed (never consumed, never broadcasts); retry requires a FRESH
+  persisted previewId (fresh key and reservation). Atomic settlement (final
+  review blockers): ONE user-scoped transaction does the attempt CAS + ledger
+  release + released audit under the per-grant advisory lock;
+  claimPendingTransfer
+  winner result RETURNS the persisted claim_id token and settle CASes the
+  exact attempt row broadcasting->cancelled WHERE id/status/claim_id match,
+  releasing the exact grant/idempotency claim in the same transaction; lost
+  CAS or ambiguous/absent ownership retains; releasePendingTransferClaim
+  broadcasting->previewed reset REPLACED (released attempt never re-opened);
+  pre-broadcast rejection settles from the SAME owned broadcasting state via the
+  same exact-owner broadcasting->cancelled CAS + release/audit in the same
+  transaction (no previewed->cancelled path exists). Both window sums
+  (claim total +
+  consumedInWindow) explicitly REWRITTEN to unreleased grant_claim_ledger
+  rows (explicit query change, not additive). Also planned: HIGH PR #3
+  remediation restoring the Solana fail-closed previewId guard (missing/blank
+  previewId => not_dispatched before getRecentBlockhash/signAndSend, no
+  timestamp fallback, retry identity preserved for retained outcomes) — spec
+  requirement "Persisted preview identity guards provider dispatch" (2
+  scenarios), design AD-11, tasks Phase 8.7; E2E verification per AGENTS.md
+  as Phase 8.8. Scenario count reconciled to 61 (baseline was 47 at git
+  HEAD, not 45): 12 reservation-release scenarios incl. the atomic
+  settlement/claim_id CAS acceptance set. No implementation yet: all Phase 8
+  work is RED-first and
+  unimplemented.
 ---

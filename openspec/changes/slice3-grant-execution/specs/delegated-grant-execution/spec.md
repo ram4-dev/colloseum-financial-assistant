@@ -319,6 +319,228 @@ persisted preview attempt identity, with no additional ledger or idempotency sto
 - **When** two covered executions occur within the rolling window
 - **Then** each execution is individually claimed and audited
 
+### Requirement: Reserved budget release on definitive no-dispatch
+
+A granted budget claim SHALL be a **reservation** from the moment its claim row
+is persisted until dispatch certainty. When the outcome is a **definitive
+non-dispatch** (the provider returns `not_dispatched`) or a preflight rejection
+(policy/recipient revalidation) inside `runFinancialTransfer`, the service
+SHALL release the reservation ONLY through the atomic settlement below: the
+exact claim-ledger row (grant + idempotency key) gets `released_at` and
+`released_reason` and a compensating `released` audit row commits IN THE SAME
+user-scoped transaction under the same per-grant advisory lock, gated by the
+successful exact-owner attempt CAS. The settle SHALL mark the old attempt
+terminal `cancelled` and release the budget in the SAME atomic transaction, so
+no later worker can win a broadcast transition on a cancelled attempt. There
+are no partial commits: settlement SHALL be ONE atomic user-scoped transaction
+(`withUserTransaction`, per-grant advisory lock acquired inside it) covering
+attempt cancellation + ledger release + compensating `released` audit ALL on
+the SAME transaction client, via the tx-only ledger method (no nested
+transaction open/commit by the method itself); ANY part failing rolls back ALL THREE
+effects together — the attempt stays `broadcasting`, the claim stays active,
+and the reservation is therefore retained (nothing persisted). The
+`claimPendingTransfer` winner result SHALL return the persisted `claim_id`
+ownership token (already persisted by migration 002) and settle SHALL thread it
+through the service: `runFinancialTransfer` enters with the attempt ALREADY
+`broadcasting` under the winner's token (claim won first, then policy/recipient
+validation, then `broadcastTransfer`), so BOTH preflight rejections
+(policy/recipient) and provider definitive `not_dispatched` settle from the
+OWNED `broadcasting` state: ONE compare-and-set on the exact attempt row
+(`broadcasting → cancelled` WHERE id, status, AND `claim_id` all match), and
+only on CAS success the SAME transaction marks the exact grant/idempotency claim
+released and inserts the audit row; a lost or absent CAS (wrong/stale
+`claim_id`, moved status, missing row) releases NOTHING and retains the budget —
+no owned-token CAS, no release. No `previewed → cancelled` path exists for
+these `runFinancialTransfer` settles. The broadcasting-to-previewed reset
+(`releasePendingTransferClaim`) is REPLACED: a released attempt is NEVER
+re-opened. If the attempt row or claim ownership is absent or ambiguous, the
+settlement SHALL retain rather than release. There is NO re-activation: a released key is
+permanently retired — a replay of `claimConsumption` for a released key MUST
+fail closed (never `consumed`, never authorizing a broadcast), and a retry of
+the same request requires a FRESH persisted `previewId` (fresh idempotency key
+and reservation). The provider reference identity stays verbatim-stable only
+for retained outcomes (`submitted`/`uncertain` retries reconcile by reference).
+Release keyed on attempt state SHALL require reading the CURRENT persisted
+attempt row and ownership BEFORE releasing: losing the single-winner attempt
+transition alone is NOT proof of no dispatch — the attempt may be
+`broadcasting` because another worker won it while sharing this same reservation
+(same attempt id ⇒ same idempotency key), so the reservation MUST be retained
+whenever the attempt is in any dispatched state or winner ownership cannot be
+distinguished from an
+in-flight dispatch. The ONLY release authority for settlements originating in
+`runFinancialTransfer` is a SUCCESSFUL exact-owner compare-and-set: the settle
+transaction itself wins `broadcasting → cancelled` on the exact attempt row
+(id + status + `claim_id` all match) and only then releases the claim and
+inserts the audit row in that SAME transaction. An absent attempt row, an
+already-`cancelled` status, an ambiguous ownership, or a lost CAS never release
+standalone — they RETAIN the reservation. No `previewed → cancelled` path
+exists for these settles. Release SHALL be idempotent:
+re-releasing an already-released key is a no-op with no second audit row. The
+reservation MUST be retained for `submitted`, `uncertain`, or any outcome where
+the transaction may have left the process — retained budget is reconciled by
+existing reference-id reconciliation, never self-released. Rolling-window accounting is an
+EXPLICIT QUERY CHANGE, not an additive side effect: BOTH existing window sums —
+the claim's authoritative cap total and the engine prefilter
+`consumedInWindow` — currently read `grant_audit_log` `used` rows and MUST be
+rewritten to sum UNRELEASED `grant_claim_ledger` rows (`released_at IS NULL`,
+claimed inside the window), so released budget actually returns; until both
+queries are rewritten, release cannot free budget. The schema
+migration SHALL be additive (release columns,
+`released` audit event in the existing CHECK, `UPDATE` grant to `recipient_app`
+under the existing forced-RLS user-isolation policy) in both the local runner and
+the Supabase chain; the query rewrites ship in the same change.
+
+#### Scenario: Submitted or uncertain outcomes retain the reservation
+
+- **Given** a covered execution whose broadcast returned `submitted` or
+  `uncertain`, including a provider error mapped to `uncertain` after the request
+  may have left the process
+- **When** the execution settles
+- **Then** the reservation is NOT released: the claim row stays unreleased, no
+  `released` audit row is written, and recovery is by reconciliation only
+
+#### Scenario: Release is idempotent and locked
+
+- **Given** a reservation already released for a grant and idempotency key
+- **When** release is requested again for the same key (replay, crash retry, or
+  duplicate settle path)
+- **Then** the release executes under the same per-grant advisory lock with no
+  second mutation and no second `released` audit row, and the original release
+  timestamp and reason are preserved
+
+#### Scenario: Definitive no-dispatch cancels the attempt and releases atomically
+
+- **Given** a covered execution that claimed grant budget and then received a
+  definitive non-dispatch for THIS execution, whose winner holds the persisted
+  `claim_id` ownership token
+- **When** the settlement transaction runs
+- **Then** it commits ALL THREE effects together — the exact attempt row CASed
+  `broadcasting → cancelled` (id + status + `claim_id` matching), the claim row
+  marked released with its reason, and the compensating `released` audit row —
+  or rolls back ALL THREE: a failed settlement persists nothing (the attempt
+  stays `broadcasting`, the claim stays active, the budget is retained), and a
+  concurrent `claimPendingTransfer` racing the settle either loses (nothing to
+  broadcast) or had already produced a retained dispatched outcome outside this
+  settle's authority
+
+#### Scenario: A released key fails closed and never authorizes a broadcast
+
+- **Given** a reservation released after a definitive non-dispatch
+- **When** the same old preview/key is replayed or retried
+- **Then** the replay of the claim fails closed (never `consumed`, no broadcast),
+  the old attempt cannot win any broadcast transition (it is terminal
+  `cancelled`), and a retry requires a FRESH persisted `previewId` deriving a
+  fresh idempotency key and a fresh reservation that CAN claim normally
+
+#### Scenario: A fresh preview claims normally after an unrelated release
+
+- **Given** a released reservation from a prior definitive non-dispatch and a
+  retry that creates a fresh persisted `previewId`
+- **When** the fresh preview claims a new reservation
+- **Then** it claims normally under the full grant/window/cap checks with its own
+  key, independently of the retired released key
+
+#### Scenario: Released budget returns to the rolling window in BOTH sums
+
+- **Given** a grant whose remaining budget could not cover a second request while
+  one reservation was held, and that reservation is later released on definitive
+  no-dispatch
+- **When** a new covered request within the rolling window is evaluated — both by
+  the claim's authoritative cap total and by the `consumedInWindow` prefilter
+- **Then** BOTH rewritten sums exclude the released reservation (summing
+  unreleased ledger rows, not audit rows), and the second execution proceeds
+  with the returned budget
+
+#### Scenario: Proven pre-dispatch blocks release; every dispatched/uncertain state retains
+
+- **Given** a covered execution whose persisted attempt row is absent, whose
+  status is already `cancelled`, whose ownership is ambiguous, or whose settle
+  carries a wrong/stale `claim_id` — and, separately, attempts in each
+  dispatched/uncertain state (`broadcasting` owned by another worker,
+  `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid`),
+  including a provider error mapped to `uncertain` after the request may have
+  left the process
+- **When** each settles
+- **Then** NOTHING is released in any of these cases: no claim row released, no
+  `released` audit row, the reservation is retained, and recovery is by
+  reference-id reconciliation only with the verbatim-stable provider reference —
+  release happens ONLY through the successful exact-owner `broadcasting →
+  cancelled` CAS inside the settlement transaction
+
+#### Scenario: The settlement is one atomic transaction gated by the claim ownership token
+
+- **Given** a covered execution whose broadcast returned a definitive
+  `not_dispatched`, whose winner holds the persisted `claim_id` ownership token
+- **When** the settle runs
+- **Then** the exact attempt row transitions `broadcasting → cancelled` only
+  where id, status, and `claim_id` all match, and the SAME transaction marks the
+  exact grant/idempotency claim released and inserts the `released` audit row;
+  an injected failure rolls back BOTH the cancellation and the ledger/audit
+
+#### Scenario: A wrong or stale claim_id cannot cancel or release
+
+- **Given** a settle carrying a `claim_id` that does not match the persisted
+  attempt row's token
+- **When** the settle CAS executes
+- **Then** the attempt is NOT cancelled, nothing is released, no audit row is
+  written, and the reservation is retained
+
+#### Scenario: Ambiguous ownership retains rather than releases
+
+- **Given** a settle whose attempt row or claim ownership cannot be resolved
+  unambiguously (row missing, multiple candidates, missing token)
+- **When** the settle runs
+- **Then** nothing is cancelled or released and the reservation is retained
+
+#### Scenario: A preflight rejection cancels and releases from the owned broadcasting state
+
+- **Given** a covered execution whose attempt is already `broadcasting` under
+  the winner's `claim_id`, rejected after the claim by policy or recipient
+  revalidation and before any dispatch
+- **When** the settle runs
+- **Then** the same owner-token `broadcasting → cancelled` CAS plus the ledger
+  release and audit commit together in one transaction, and any part failing
+  rolls back all of it; no `previewed → cancelled` path exists for these
+  `runFinancialTransfer` settles, and the broadcasting-to-previewed reset no
+  longer exists — a released attempt is never re-opened
+
+#### Scenario: A concurrent attempt winner never has its reservation released
+
+- **Given** two executions racing the same persisted preview, one of which wins
+  the single-winner attempt transition and may be broadcasting under the shared
+  reservation (same attempt id ⇒ same idempotency key)
+- **When** the loser settles without dispatching
+- **Then** the loser does NOT release the reservation: it retains the budget
+  (its claim was a replay of a live claim) and degrades without a `released`
+  audit row, because winner ownership cannot be distinguished from an in-flight
+  dispatch at settle time
+
+### Requirement: Persisted preview identity guards provider dispatch
+
+The Solana devnet provider SHALL fail closed on `broadcastTransfer` when the
+request carries no persisted preview identity: a missing, empty, or
+whitespace-only `previewId` returns `not_dispatched` BEFORE any RPC read
+(recent blockhash) and BEFORE any signer call (`signAndSend`). No timestamp,
+random, or synthesized fallback reference SHALL be generated. A valid
+`previewId` SHALL be used verbatim as the dispatch reference so a retry of the
+same persisted preview reuses the identical idempotency identity.
+
+#### Scenario: Missing or blank preview ID is rejected before any dispatch seam
+
+- **Given** a broadcast request whose `previewId` is absent, empty, or
+  whitespace-only
+- **When** `broadcastTransfer` executes
+- **Then** it resolves `not_dispatched` without calling `getRecentBlockhash`
+  or `signAndSend`, and no fallback reference is generated
+
+#### Scenario: A valid preview ID dispatches once with stable retry identity
+
+- **Given** a broadcast request with a valid persisted `previewId`
+- **When** the transfer is broadcast and later retried after an uncertain
+  outcome with the same preview
+- **Then** both dispatch attempts use exactly that `previewId` as the reference
+  id, so reconciliation correlates one identity across retries
+
 ### Requirement: Closed degradation with simple explicit copy
 
 When the coverage outcome is not `covered`, the user-facing copy SHALL state
