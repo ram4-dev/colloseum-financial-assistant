@@ -71,3 +71,9 @@ disables the selector and leaves fail-closed behavior.
 
 - 3.4 Live Privy readback was unavailable (environment-gated).
 - 3.5 A human-approved devnet signature is pending; none was signed/submitted.
+
+## Retry review remediation
+
+- [x] 5.1 Add RED coverage for missing, empty, and whitespace-only preview IDs; prove no blockhash RPC or signing occurs.
+- [x] 5.2 Remove the timestamp-generated reference fallback and return `not_dispatched` before any signing path.
+- [ ] 5.3 Run exact-branch focused/full checks, record results, and hand the pushed PR SHA to Hermes.

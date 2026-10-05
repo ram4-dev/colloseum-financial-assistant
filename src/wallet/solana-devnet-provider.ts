@@ -402,9 +402,15 @@ export class SolanaDevnetProvider implements WalletProvider {
     request: TransferRequest,
   ): Promise<BroadcastOutcome> {
     assertDevnetNetwork(request.network);
+    if (!request.previewId?.trim()) {
+      return {
+        kind: "not_dispatched",
+        reason: "A persisted preview ID is required before signing.",
+      };
+    }
     this.assertRecipient(request.to);
     const lamports = this.amountToLamports(request.amount);
-    const referenceId = request.previewId ?? `sol-${this.now()}`;
+    const referenceId = request.previewId;
     const identity = this.bound();
     const recentBlockhash = await this.requireRecentBlockhash();
     const base64Transaction = serializeUnsignedTransaction(
