@@ -252,3 +252,134 @@ two `users-db` sentinel tests (missing `DEMO_USER_ID`), one durable
 and two `api-contacts` timeouts. The four-file baseline subset on `origin/main`
 also reports 6 failed / 10 passed. The delegated-grant database tests remain
 green in isolation (5 files / 35 passed).
+
+## Reservation-release amendment (2026-10-05, planning only — no implementation)
+
+**Binding user decision:** when a valid grant claim is followed by an
+attempt/preflight failure with no transaction dispatched, release the reserved
+budget with compensating audit; retain it for `submitted`, `uncertain`, or
+`broadcast_in_progress`.
+
+### Model (AD-6/AD-10; spec requirement "Reserved budget release on definitive no-dispatch")
+
+- Claims in `grant_claim_ledger` are RESERVATIONS from persist until dispatch
+  certainty; `released_at`/`released_reason` (migration `012` + Supabase mirror
+  `20260901001100`, additive; `released` added to the audit event CHECK; forced
+  RLS unchanged) mark release; BOTH window sums (claim authoritative total AND
+  engine `consumedInWindow` prefilter) are explicitly REWRITTEN to sum UNRELEASED
+  `grant_claim_ledger` rows, so released budget actually returns to the rolling
+  window (additive columns alone cannot free budget — both queries read
+  `grant_audit_log` today).
+- Release points: definitive `not_dispatched` (service.ts:985 branch) and
+  preflight policy/recipient rejection — BOTH settle from the OWNED
+  `broadcasting` state `runFinancialTransfer` enters with (claim won first,
+  then validation, then broadcast), and the ONLY release authority is the
+  EXACT-OWNER compare-and-set `broadcasting → cancelled` (id + status +
+  `claim_id` all match) inside the settlement transaction; a lost/absent CAS,
+  an absent row, an already-`cancelled` status, or ambiguous ownership NEVER
+  release standalone — they retain; no `previewed → cancelled` path exists
+  for these settles. Retain on EVERY dispatched/uncertain state
+  (`broadcasting` unowned, `submitted`, `uncertain`, `confirmed`, `reverted`,
+  `receipt_invalid`; incl. the provider-exception mapping to `uncertain`) and
+  whenever winner ownership is indistinguishable from an in-flight dispatch — a
+  concurrent winner may be broadcasting under the same reservation.
+- Idempotent locked release keyed by grant + idempotency key: same per-grant
+  advisory lock, same user-scoped transaction, one `released` audit row max,
+  original timestamp/reason preserved on re-release; a replayed live claim is
+  never released by the replay path itself.
+- Retry contract (NO re-activation — the version-token reactivation design was
+  REJECTED for lifecycle races): the settlement marks the old attempt terminal
+  `cancelled` and releases the budget IN THE SAME atomic transaction (all
+  three effects commit together or all roll back — no partial commits); a
+  released same-key replay FAILS CLOSED (never `consumed`, never authorizing a
+  broadcast); a retry requires a FRESH persisted `previewId` — fresh
+  idempotency key and a fresh reservation claimed under full grant/window/cap
+  checks; provider reference identity stays verbatim-stable only for retained
+  outcomes (`submitted`/`uncertain` reconcile by reference).
+
+### Provider previewId guard remediation (HIGH PR #3, planning only — no implementation)
+
+- Restores the fail-closed `previewId` guard in
+  `src/wallet/solana-devnet-provider.ts` (`broadcastTransfer`): missing/empty/
+  whitespace preview id ⇒ `not_dispatched` BEFORE `getRecentBlockhash` and BEFORE
+  `signAndSend`; no timestamp/random fallback; valid id used verbatim (retry
+  identity preserved). Matches slice2 commit `e39dbad`.
+- Tracked as tasks Phase 8.7 (RED-first, tests in
+  `tests/unit/solana-devnet-provider.test.ts`) and spec requirement "Persisted
+  preview identity guards provider dispatch" (2 scenarios); design AD-11.
+- E2E verification per AGENTS.md tracked as Phase 8.8 (focused unit + DB suites,
+  `npm test`/typecheck/lint, covered-path E2E fixtures).
+- Budget claim/refund semantics remain governed by AD-10, not by this guard.
+
+### Atomic settlement with claim ownership token (final review blockers, planning only)
+
+- **One atomic user-scoped settlement transaction** per settle: attempt
+  cancellation + ledger release + compensating `released` audit, all under the
+  per-grant advisory lock inside the user transaction. No partial persistence:
+  any failure rolls back attempt cancellation AND ledger/audit together.
+- **Ownership token:** the existing `claimPendingTransfer` winner already
+  persists `claim_id` (migration 002, UUID) on the attempt row; the claim result
+  now RETURNS it and the service carries it to settle. For a definitive provider
+  `not_dispatched`, settle performs a compare-and-set on the EXACT attempt row:
+  `broadcasting → cancelled` WHERE id, status = `broadcasting`, AND
+  `claim_id` = the winner's token all match; only on CAS success does the SAME
+  transaction mark the exact grant/idempotency claim released and insert the
+  `released` audit row. If the CAS loses (wrong/stale claim_id, status moved),
+  NOTHING is released and budget is retained.
+- **Preflight rejection** (policy/recipient): settles from the SAME owned
+  `broadcasting` state via the same owner-token `broadcasting → cancelled` CAS
+  - ledger release/audit in the same transaction; any part failing rolls back
+  everything.
+- **Replaces `releasePendingTransferClaim`:** the existing broadcasting-to-
+  previewed reset is removed — a released attempt is never re-opened. If the
+  attempt row or claim ownership is absent or ambiguous, the settlement RETAINS
+  the reservation rather than releasing.
+- **API/task/test seam:** `claimPendingTransfer` winner result carries `claim_id`;
+  the settle path threads it through the service to the repository settlement;
+  RED cases: exact-owner broadcasting→cancelled+release atomically; wrong/stale
+  claim_id cannot cancel or release; race winner retains; injected failure rolls
+  back both cancellation and ledger/audit; pre-broadcast CAS cancellation+release;
+  ambiguity retains.
+
+### Scenario-count reconciliation
+
+The pre-amendment baseline was 47 scenarios (git HEAD), not 45 as the binding
+headers previously stated: the header count had drifted before this amendment.
+Final arithmetic: 47 baseline + 12 reservation-release scenarios + 2
+provider-guard scenarios = 61; binding headers (tasks.md, design.md, state.yaml)
+now state 61 / 12.
+
+The 12 release scenarios enumerate as: (1) definitive no-dispatch cancels the
+attempt and releases atomically; (2) a released key fails closed and never
+authorizes a broadcast; (3) a fresh preview claims normally after an unrelated
+release; (4) released budget returns to the rolling window in BOTH sums; (5)
+proven pre-dispatch blocks release — every dispatched/uncertain state retains;
+(6) the settlement is one atomic transaction gated by the claim ownership token;
+(7) a wrong or stale claim_id cannot cancel or release; (8) ambiguous ownership
+retains rather than releases; (9) a preflight rejection cancels and releases
+from the owned broadcasting state; (10) a concurrent attempt winner never has
+its reservation released; (11) submitted or uncertain outcomes retain the
+reservation; (12) release is idempotent and locked.
+
+The "submitted or uncertain outcomes retain" and "proven pre-dispatch vs
+dispatched/uncertain states" scenarios were kept as INDEPENDENT acceptance
+scenarios (not merged) per review. Status semantics: settlements originate
+in `runFinancialTransfer` with the attempt ALREADY `broadcasting` under the
+winner's `claim_id`; the ONLY release authority is the successful exact-owner
+`broadcasting → cancelled` CAS in the settlement transaction — an absent row,
+already-`cancelled`, ambiguous ownership, or lost CAS retains, and no
+`previewed → cancelled` release path exists.
+
+### Plan
+
+- Tasks Phase 8.1–8.8 (all unchecked; RED-first: 8.1 migration, 8.2 ledger
+  `releaseReservationInTransaction` (tx-only), 8.2b atomic all-or-nothing
+  settlement, 8.3 window accounting, 8.4 service settle wiring;
+  8.5 implementation AFTER RED; 8.6 GREEN evidence; 8.7 provider guard RED-first;
+  8.8 E2E verification per AGENTS.md).
+- Budget claim/refund semantics from the earlier HIGH PR #3 review finding are
+  NOT yet implemented — the pending consequence question was answered by this
+  decision; Phase 8 implementation is the next bounded Strict-TDD batch.
+- The solana-devnet `previewId` fail-closed guard restoration (HIGH PR #3) is
+  planned in this amendment as Phase 8.7 (AD-11); its implementation also
+  awaits RED evidence, in the same bounded batch or a separate one.
