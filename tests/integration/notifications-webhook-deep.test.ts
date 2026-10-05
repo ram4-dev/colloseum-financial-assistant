@@ -34,7 +34,7 @@ function hmacSignature(
 
 // Task 2.3 deep coverage: exact raw-byte verification, ownership resolution,
 // duplicate delivery semantics, and the authenticated feed surface.
-suite("provider webhook ingress and notifications feed (task 2.3)", () => {
+suite("provider webhook receipts + notifications feed (receipt-only)", () => {
   let database: DatabaseClient;
   const keys = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const verificationKeyPem = String(
@@ -42,7 +42,6 @@ suite("provider webhook ingress and notifications feed (task 2.3)", () => {
   );
 
   const privyAccountId = `acct-test-${randomUUID()}`;
-  const attackerAccountId = `acct-attacker-${randomUUID()}`;
   // Valid Solana devnet address (base58, from existing fixtures).
   const walletAddress = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
   const otherAddress = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
@@ -220,26 +219,23 @@ suite("provider webhook ingress and notifications feed (task 2.3)", () => {
     expect(await feedCount()).toBe(0);
   });
 
-  it("accepts a valid signed delivery and stores the notification only under the enrolled owner", async () => {
+  it("stores only a receipt for a valid signed delivery (receipt-only)", async () => {
     const deliveryId = `msg-owner-${randomUUID()}`;
-    const forgedUserId = randomUUID();
     const raw = compactPayload(privyAccountId, walletAddress, {
-      user_id: forgedUserId,
+      user_id: randomUUID(),
     });
     const response = await injectRaw(deliveryId, raw);
     expect(response.statusCode).toBe(200);
     expect(await receiptCount(deliveryId)).toBe(1);
-
-    const rows = await database.query<{ user_id: string }>(
-      `SELECT user_id FROM wallet_notifications WHERE wallet_id = $1`,
+    // No wallet_event notification may be produced by the webhook itself.
+    const rows = await database.query<{ id: string }>(
+      `SELECT id FROM wallet_notifications WHERE wallet_id = $1`,
       [walletId],
     );
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]!.user_id).toBe(userId);
-    expect(rows.rows[0]!.user_id).not.toBe(forgedUserId);
+    expect(rows.rows).toHaveLength(0);
   });
 
-  it("acknowledges a duplicate delivery without a second receipt or notification", async () => {
+  it("acknowledges a duplicate delivery with a single receipt", async () => {
     const deliveryId = `msg-dup-${randomUUID()}`;
     const raw = compactPayload(privyAccountId, walletAddress);
     const first = await injectRaw(deliveryId, raw);
@@ -247,31 +243,30 @@ suite("provider webhook ingress and notifications feed (task 2.3)", () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(await receiptCount(deliveryId)).toBe(1);
-    expect(await feedCount()).toBe(1);
   });
 
-  it("does not notify when the verified account binds a different wallet address", async () => {
-    // The account exists but its enrolled address is NOT the payload address.
+  it("does not notify for a mismatched wallet address (receipt only)", async () => {
     const deliveryId = `msg-mismatch-${randomUUID()}`;
     const raw = compactPayload(privyAccountId, otherAddress);
     const response = await injectRaw(deliveryId, raw);
     expect(response.statusCode).toBe(200);
-
-    const rows = await database.query<{ user_id: string }>(
-      `SELECT user_id FROM wallet_notifications WHERE wallet_id = $1`,
+    expect(await receiptCount(deliveryId)).toBe(1);
+    const rows = await database.query<{ id: string }>(
+      `SELECT id FROM wallet_notifications WHERE wallet_id = $1`,
       [walletId],
     );
-    // Still exactly the one notification from the earlier accepted delivery.
-    expect(rows.rows).toHaveLength(1);
-    const unknown = await database.query<{ id: string }>(
-      `SELECT id FROM user_wallets WHERE provider_wallet_id = $1 AND address = $2`,
-      [attackerAccountId, otherAddress],
-    );
-    expect(unknown.rows).toHaveLength(0);
+    expect(rows.rows).toHaveLength(0);
   });
 
   it("exposes the feed only to the enrolled owner and supports mark-read", async () => {
-    // Owner reads exactly the one canonical notification.
+    // Seed the canonical row the reconciler would have created.
+    await database.withUserTransaction(userId, (client) =>
+      client.query(
+        `INSERT INTO wallet_notifications (user_id, wallet_id, category, status, dedupe_key, title, projection)
+             VALUES ($1, $2, 'wallet_event', 'deposit', $3, 'Depósito confirmado', '{}')`,
+        [userId, walletId, `chain:test:${randomUUID()}`],
+      ),
+    );
     expect(await feedCount()).toBe(1);
 
     const app = buildServer();

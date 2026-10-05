@@ -23,11 +23,17 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
 function dependencies(
   overrides: Partial<NotificationIngestionDependencies> = {},
 ): NotificationIngestionDependencies & {
-  publishInvalidation: ReturnType<typeof vi.fn>;
+  publishInvalidation: (event: NotificationEvent) => Promise<void>;
 } {
   const insertNotification = vi.fn(async () => ({ inserted: true }));
-  const publishInvalidation = vi.fn(async (): Promise<void> => undefined);
-  return { insertNotification, publishInvalidation, ...overrides };
+  const publishInvalidation = vi.fn(async (_event: NotificationEvent) => {});
+  return {
+    insertNotification,
+    publishInvalidation: publishInvalidation as (
+      event: NotificationEvent,
+    ) => Promise<void>,
+    ...overrides,
+  };
 }
 
 describe("canonical notification ingestion (dedupe, replay, projection)", () => {

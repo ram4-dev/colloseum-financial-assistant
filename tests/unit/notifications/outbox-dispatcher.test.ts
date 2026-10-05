@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   dispatchPendingAssistantEvents,
   type AssistantOutboxDependencies,
+  type OutboxInvalidation,
   type PendingAssistantOutboxEvent,
 } from "../../../src/notifications/outbox-dispatcher.js";
 
@@ -34,11 +35,15 @@ function dependencies(
   state: ReturnType<typeof makeState>,
   overrides: Partial<AssistantOutboxDependencies> = {},
 ): AssistantOutboxDependencies & {
-  commitNotificationAndCompleteEvent: ReturnType<typeof vi.fn>;
-  publishInvalidation: ReturnType<typeof vi.fn>;
+  commitNotificationAndCompleteEvent: (
+    event: PendingAssistantOutboxEvent,
+  ) => Promise<{ committed: boolean; invalidation?: OutboxInvalidation }>;
+  publishInvalidation: (event: OutboxInvalidation) => Promise<void>;
 } {
   const commitNotificationAndCompleteEvent = vi.fn(
-    async (event: PendingAssistantOutboxEvent) => {
+    async (
+      event: PendingAssistantOutboxEvent,
+    ): Promise<{ committed: boolean; invalidation?: OutboxInvalidation }> => {
       state.notifications.push({
         userId: event.userId,
         dedupeKey: event.dedupeKey,
@@ -50,14 +55,21 @@ function dependencies(
             candidate.status === event.status
           ),
       );
+      return { committed: true };
     },
   );
-  const publishInvalidation = vi.fn(async () => undefined);
-  return {
+  const publishInvalidation = vi.fn(
+    async (_event: OutboxInvalidation): Promise<void> => undefined,
+  );
+  const deps: AssistantOutboxDependencies = {
     loadPendingEvents: vi.fn(async () => state.pending),
     commitNotificationAndCompleteEvent,
     publishInvalidation,
     ...overrides,
+  };
+  return deps as AssistantOutboxDependencies & {
+    commitNotificationAndCompleteEvent: typeof commitNotificationAndCompleteEvent;
+    publishInvalidation: typeof publishInvalidation;
   };
 }
 
@@ -100,6 +112,14 @@ describe("assistant lifecycle outbox dispatcher (restart recovery contract)", ()
               candidate.status === event.status
             ),
         );
+        return {
+          committed: true,
+          invalidation: {
+            type: "conversation_state_changed" as const,
+            conversationId: "conv-1",
+            revision: 1,
+          },
+        };
       }),
       publishInvalidation: vi.fn(async () => {
         order.push("publish");
