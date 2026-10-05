@@ -12,17 +12,17 @@ PR #3 stacks on `origin/slice2-provider-solana-devnet` until PR #2 merges. Herme
 
 ## Phase 1 — Unit RED: amount and eligibility
 
-- [ ] 1.1 Test exact SOL-to-lamport conversion (`0.01` = `10000000`), unknown decimals, malformed/non-integral input, and +1 rejection.
-- [ ] 1.2 Test classification for active, expired, revoked, over-cap, recipient/chain/action/wallet mismatch, and `policy_not_ready`.
-- [ ] 1.3 Test deterministic least-privilege selection and each Q3 tiebreaker.
-- [ ] 1.4 Test original intent binding: ambiguous amount/recipient, later grant, or model/tool-origin request never qualifies; tool args cannot fill missing intent.
-- [ ] 1.5 Assert classifier takes static inputs only and cannot read DB or consumption state.
+- [x] 1.1 Test exact SOL-to-lamport conversion (`0.01` = `10000000`), unknown decimals, malformed/non-integral input, and +1 rejection.
+- [x] 1.2 Test classification for active, expired, revoked, over-cap, recipient/chain/action/wallet mismatch, and `policy_not_ready`.
+- [x] 1.3 Test deterministic least-privilege selection and each Q3 tiebreaker.
+- [x] 1.4 Test original intent binding: ambiguous amount/recipient, later grant, or model/tool-origin request never qualifies; tool args cannot fill missing intent.
+- [x] 1.5 Assert classifier takes static inputs only and cannot read DB or consumption state.
 
 ## Phase 2 — Classifier GREEN
 
-- [ ] 2.1 Implement `src/conversations/grant-coverage.ts` with integer-only conversion using provider token decimals.
-- [ ] 2.2 Implement static grant evaluation, stable candidate ordering, and preview origin/intent metadata.
-- [ ] 2.3 Refactor; rerun unit tests, typecheck, lint.
+- [x] 2.1 Implement `src/conversations/grant-coverage.ts` with integer-only conversion using provider token decimals.
+- [x] 2.2 Implement static grant evaluation, stable candidate ordering, and preview origin/intent metadata.
+- [x] 2.3 Refactor; rerun unit tests, typecheck, lint.
 
 ## Phase 3 — Conversation RED/GREEN
 
