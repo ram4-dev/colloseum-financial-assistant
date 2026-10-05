@@ -66,6 +66,21 @@ function provider(
 }
 
 describe("SolanaDevnetProvider", () => {
+  it.each([undefined, "", "   "])(
+    "fails closed without a persisted preview ID before RPC or signing (%s)",
+    async (previewId) => {
+      const rpc = rpcDouble();
+      const signer = signerDouble();
+      const p = provider(rpc, signer);
+
+      await expect(
+        p.broadcastTransfer({ ...REQUEST, previewId }),
+      ).resolves.toMatchObject({ kind: "not_dispatched" });
+      expect(rpc.getRecentBlockhash).not.toHaveBeenCalled();
+      expect(signer.signAndSend).not.toHaveBeenCalled();
+    },
+  );
+
   it("satisfies the normalized provider contract on devnet", async () => {
     const p = provider();
     await expect(p.health()).resolves.toMatchObject({ status: "healthy" });

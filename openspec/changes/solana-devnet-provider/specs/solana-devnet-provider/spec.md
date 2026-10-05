@@ -101,6 +101,13 @@ broadcast Privy-signed bytes independently.
   self-broadcasts the returned `signed_transaction` within the same call or
   across calls
 
+#### Scenario: Missing persisted preview never dispatches
+
+- **Given** `broadcastTransfer` receives a missing or blank preview ID
+- **When** it is asked to sign and send a Solana transfer
+- **Then** it returns `kind: 'not_dispatched'` before requesting a blockhash or calling the signer
+- **And** it does not synthesize a time-based Privy `reference_id`
+
 #### Scenario: Execution rides only the policy-evaluated path
 
 - **Given** the provider's injected dependencies
