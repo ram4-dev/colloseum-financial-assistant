@@ -21,6 +21,9 @@ Branch base: `slice4-voice-confirmation` at `10aab3e`.
 3. Verify signed webhook bytes before parsing or persisting. Provider event IDs (plus provider/account scope) are dedupe keys. Reject invalid signatures and stale/replayed deliveries before side effects.
 4. Poll reconciliation must be independently sufficient. Persist per-wallet cursors, use bounded pages and overlap/re-read around cursors, and make event insertion idempotent. Do not use balance deltas as the transaction identity.
 5. Determine exact Privy event coverage for embedded Solana wallets and incoming transfers against the target app/dashboard before enabling a provider subscription. Public material located describes Svix verification, while the server-wallet announcement describes transaction and incoming-fund webhooks for server wallets; this does not establish coverage for this app's embedded/user wallets. The signed webhook adapter can remain provider-neutral, but unsupported event classes must be recovered by RPC reconciliation.
+6. Capture assistant attempt events transactionally before asynchronous notification processing. A post-commit in-process hook has a crash window and does not satisfy the intake's durable-notice acceptance; use an outbox row committed alongside the attempt status change and make event processing retryable.
+7. Define RLS by table purpose: notification and outbox data is user-owned; webhook receipts and reconciliation cursor/lease state is system-owned and accessible only in anonymous service transactions. Applying a user-only policy to worker tables blocks ingestion.
+8. Treat `uncertain` as a durable notification-worthy assistant status because dispatch may have succeeded; exclude `not_dispatched`, which returns to `previewed` and remains retryable with an explicit conversation response.
 
 ## Options considered
 
@@ -33,6 +36,7 @@ Branch base: `slice4-voice-confirmation` at `10aab3e`.
 ## Vendor evidence and unresolved capability check
 
 - Privy documents Svix signature verification and signed headers for webhook deliveries: [Privy webhook verification](https://docs.privy.io/guide/server/webhooks/verify).
+- Svix receiving guidance states its libraries reject timestamps more than five minutes in the past or future; use a 300-second boundary in the verifier contract and tests, and require synchronized server time: [Svix webhook verification guide](https://www.svix.com/guides/receiving/receive-webhooks-with-python/).
 - Privy's official server-wallet announcement describes transaction-status and incoming-funds webhooks for server wallets; that is not evidence that the same event contract applies to this project's embedded user wallets: [Privy server wallets](https://privy.dev/blog/introducing-server-wallets).
 - Before enabling live delivery, verify with Privy's current product docs/dashboard or test tenant which transaction and deposit event types apply to this app's embedded Solana wallets, their finality semantics, replay window, and endpoint configuration. Keep reconciliation as the correctness path if any class is absent.
 

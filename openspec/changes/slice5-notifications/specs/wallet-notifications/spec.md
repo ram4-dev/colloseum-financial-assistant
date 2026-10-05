@@ -12,9 +12,11 @@ The system MUST persist notification projections for relevant assistant-initiate
 
 #### Scenario: Assistant transfer lifecycle is visible
 - **GIVEN** an authenticated user initiates a transfer through an active grant or explicit confirmation
-- **WHEN** the operation reaches submitted, confirmed, or terminal failure/revert
+- **WHEN** the attempt reaches submitted, uncertain, confirmed, reverted, or receipt_invalid
 - **THEN** the system persists one safe notification per canonical operation state
 - **AND** assistant transfer state is sourced from its durable `conversation_transfer_attempts` record, not an in-process task event
+- **AND** the status update and a retryable outbox event are committed atomically, so process failure cannot permanently lose the notification
+- **AND** uncertain is displayed as unresolved; retryable not_dispatched attempts returned to previewed create no feed item
 - **AND** the user can retrieve it from the feed outside LiveKit.
 
 #### Scenario: Inbound event is recovered
@@ -34,7 +36,7 @@ The system MUST omit webhook secrets, authorization material, signing data, raw 
 #### Scenario: Notification refreshes without reload
 - **GIVEN** the activity feed is open
 - **WHEN** a new notification is persisted
-- **THEN** the client refreshes by bounded HTTP polling, page focus, or an existing LiveKit revision signal.
+- **THEN** the client refreshes by a 30-second visible-page HTTP interval, page focus, or an existing LiveKit revision signal.
 
 #### Scenario: Read state is user-owned
 - **GIVEN** a notification belongs to the authenticated user

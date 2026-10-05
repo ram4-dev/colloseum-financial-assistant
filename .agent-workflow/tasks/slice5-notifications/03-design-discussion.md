@@ -14,14 +14,15 @@ Show a durable, authenticated activity feed in the web app for assistant-initiat
 ## Product questions / assumptions to confirm at the outline gate
 
 1. “Relevant” inbound activity means confirmed SOL and SPL-token deposits visible from the user's one enrolled Solana wallet; spam-token filtering and pricing are excluded.
-2. Send notifications for persisted assistant attempt states `submitted`, `confirmed`, `reverted`, and `receipt_invalid`; avoid a separate notification for every transient polling observation. `not_dispatched` currently returns the attempt to `previewed`, so decide at outline review whether it is intentionally excluded as retryable or needs a durable terminal state first.
+2. Persist notifications for assistant attempt states `submitted`, `uncertain`, `confirmed`, `reverted`, and `receipt_invalid`; dedupe by attempt ID + state. An uncertain notification must say the outcome is unknown, because dispatch may have succeeded. `not_dispatched` returns the attempt to `previewed`, is retryable, and produces no inbox notification; the existing conversation response remains the user feedback.
 3. Show time, asset/amount when known, direction, status, and a devnet explorer link; never expose provider payloads, webhook secrets, authorization headers, signing details, or unnecessary counterparties.
-4. The feed may refresh on page focus and bounded interval while visible, while LiveKit revision events trigger immediate refresh. Browser notifications and native push are excluded.
+4. The feed refreshes on page focus and every 30 seconds while visible; LiveKit revision events trigger immediate refresh. Browser notifications and native push are excluded.
 
 ## Technical shape
 
-- Add a notification ledger with unique `(user_id, dedupe_key)`, category/status, safe projection JSON, optional `wallet_id`, `operation_id`, `conversation_id`, event timestamp, created/read timestamps, and RLS. Add reconciliation cursor state per wallet/network.
+- Add a notification ledger with unique `(user_id, dedupe_key)`, category/status, safe projection JSON, optional `wallet_id`, `operation_id`, `conversation_id`, event timestamp, created/read timestamps, and user-scoped RLS. Add reconciliation cursor/lease and webhook receipt tables with system-context-only RLS policies; these are not user feed data and must be writable by the server worker in anonymous service transactions.
 - Add a single ingestion service that validates ownership and normalized event fields, deduplicates transaction/source events, inserts notification(s), then publishes conversation revision invalidation where a conversation is attached. For assistant transitions, use the `conversation_transfer_attempts` ID + persisted state as the idempotency identity. A durable insert must succeed before notification fan-out; existing conversation state revisions remain an independent refresh signal.
+- Add a transactional outbox event in the same database transaction as each notification-worthy assistant attempt transition. A worker retries unprocessed outbox events through the canonical ingestion path; notification insertion and marking the outbox event processed commit atomically. This closes the process-crash gap between the durable attempt update and notification persistence. LiveKit invalidation happens after commit and may fail safely because the feed is durable and polls while visible.
 - Add an authenticated paginated feed/read API. A webhook route is separate from identity-authenticated routes, verifies raw bytes using the provider signature contract, resolves provider wallet identity to the local wallet, and never trusts a user ID from payload.
 - Add a bounded reconciliation loop with one active run per wallet, persisted cursors, page limits, overlap-safe re-reading, backoff, and shutdown cancellation. It queries Solana RPC/provider history for confirmed signatures; webhook ingestion and operation lifecycle ingestion share dedupe rules.
 - Add an activity/feed surface in the existing web app. Fetch on mount/focus and bounded visible-page interval; show unread state and allow mark-read. When an active conversation receives LiveKit `conversation_state_changed`, refresh its conversation and relevant feed state.
@@ -30,10 +31,20 @@ Show a durable, authenticated activity feed in the web app for assistant-initiat
 ## Main risks
 
 - A wallet's incoming transaction history may require RPC/provider APIs and rate limits not covered by current provider methods.
-- A transaction can be observed first by polling and later by webhook; canonical dedupe key must be chain/network + signature + wallet + event class, while webhook ID separately prevents delivery replay.
+- A transaction can be observed first by polling and later by webhook; canonical dedupe key must be chain/network + signature + wallet + event class, while webhook ID separately prevents delivery replay. Concurrent insert losers use `ON CONFLICT DO NOTHING`; only the winning insert publishes invalidation.
 - Reconciliation in multiple API replicas must not duplicate work or skip events; use DB leasing/advisory locking or a durable queue, and cursor overlap.
 - Fastify's default parsed body is not suitable for signature validation; register an isolated raw-body parser/route and test exact bytes.
-- Feed correctness must not depend on process-local listeners; LiveKit publish failures cannot roll back the notification insert.
+- Feed correctness must not depend on process-local listeners; LiveKit publish failures cannot roll back the notification insert. Assistant attempt events are captured transactionally in the outbox before the worker sees them.
+- The Svix replay timestamp tolerance is five minutes in its libraries; keep the verifier contract and a ±300-second boundary test explicit, with server clock synchronization required.
+
+## Fixed implementation contracts
+
+- Table RLS: notification projections are accessible only when `app.user_id = user_id`. Attempt transitions insert outbox rows in that user transaction. The worker enumerates minimal event references in anonymous service context, then re-enters the resolved owner's transaction to insert a notification and mark its event complete. Webhook receipts, reconciliation cursors/leases, and the narrow provider-wallet resolver are system-context-only; feed routes never expose them. Prove both boundaries with PostgreSQL tests.
+- The inbox refreshes every 30 seconds while visible, on focus, and immediately after `conversation_state_changed`.
+- MVP feed layout is a flat time-ordered list with unread state; no attempt grouping.
+- Enforce a 300-second past/future webhook timestamp window and synchronized server time.
+- Assistant state mapping: `submitted`, `uncertain`, `confirmed`, `reverted`, and `receipt_invalid` each get one safe notice. `uncertain` communicates unknown outcome and no automatic retry; `not_dispatched` returns to `previewed`, stays retryable, and remains conversation-only.
+- Use an outbox rather than accepting crash loss: attempt-state update + outbox insert are atomic; the worker commits notification insert + outbox completion together. LiveKit failure after commit is recovered by bounded HTTP refresh.
 
 ## Design gate status
 

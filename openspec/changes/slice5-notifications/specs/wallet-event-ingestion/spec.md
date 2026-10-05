@@ -32,7 +32,8 @@ The system MUST reconcile supported wallet activity using persisted per-wallet/n
 #### Scenario: Webhook and poll overlap
 - **GIVEN** the same chain event arrives by webhook and reconciliation
 - **WHEN** both paths ingest it concurrently or sequentially
-- **THEN** exactly one canonical notification exists and the cursor advances only after durable processing.
+- **THEN** exactly one canonical notification exists and the cursor advances only after durable processing
+- **AND** a concurrent insert loser treats the unique-key conflict as already canonical and does not publish another invalidation.
 
 #### Scenario: Provider lacks event coverage
 - **GIVEN** the configured provider does not deliver a supported event class for embedded Solana wallets
@@ -47,3 +48,17 @@ The system MUST insert the canonical notification before publishing any LiveKit 
 - **GIVEN** a notification is committed for an active conversation
 - **WHEN** LiveKit is unavailable
 - **THEN** the durable feed remains readable and the client can discover it through HTTP refresh.
+
+### Requirement: Retry assistant lifecycle delivery durably
+
+The system MUST write an outbox record in the same PostgreSQL transaction as each notification-worthy `conversation_transfer_attempts` state transition. A dispatcher MUST retry pending outbox records and commit notification insertion plus outbox completion atomically. Notifications and outbox writes MUST be isolated to the resolved user; webhook receipts and reconciliation cursor/lease tables MUST use explicit system-context-only access policies rather than user feed policies.
+
+#### Scenario: Dispatcher restarts after an attempt transition
+- **GIVEN** an assistant attempt transition and its outbox row committed
+- **WHEN** the process stops before creating the notification and later restarts
+- **THEN** the outbox event is retried and produces one notification for that attempt state.
+
+#### Scenario: System ingestion respects table-specific RLS
+- **GIVEN** a service transaction without a user context
+- **WHEN** the webhook handler or reconciler writes receipts, cursors, and leases
+- **THEN** it can access only the system-owned ingestion tables and cannot read or modify user notification rows.

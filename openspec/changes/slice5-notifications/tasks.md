@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Estimated changed lines | 450–650 |
+| Estimated changed lines | 650–900 |
 | 400-line budget risk | High |
 | Chained PRs recommended | No; Ramiro authorized one reviewable PR per slice |
 | Suggested split | Single PR for Slice 5 with phase commits |
@@ -20,31 +20,32 @@ Chain strategy: size-exception
 
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
 |---|---|---|---|---|---|
-| 1 | Durable feed, event ingestion, reconciliation, and UI | Slice 5 PR | `npm test -- tests/unit/notifications tests/integration/notifications` | `npm run test:e2e:browser` with fake provider/RPC; no real funds | Disable ingress/reconciler and hide feed; additive tables remain |
+| 1 | Durable feed, ingestion, reconciliation, UI | Slice 5 PR | `npm test -- tests/unit/notifications tests/integration/notifications` | Browser E2E with fake provider/RPC; no funds | Disable ingress/reconciler, hide feed; keep additive tables |
 
 ## Phase 1: RED contracts
 
-- [ ] 1.1 Add RED tests for raw-byte signature failure, timestamp/replay rejection, provider identity-to-wallet ownership, and no side effects on invalid webhook.
-- [ ] 1.2 Add RED tests for canonical event normalization, `conversation_transfer_attempts` state notification/idempotency, webhook/poll overlap dedupe, per-user RLS, and safe projection.
-- [ ] 1.3 Add RED tests for cursor overlap, page failure without cursor advance, concurrent wallet reconciliation exclusion, and RPC rate-limit backoff.
-- [ ] 1.4 Add RED frontend tests for empty/unread/read feed, focus refresh, visible-page polling, and LiveKit invalidation refresh.
+- [ ] 1.1 RED: raw-byte signatures, ±300-second timestamps, wallet identity resolution, and invalid-webhook no-side-effects.
+- [ ] 1.2 RED: assistant state mapping (`uncertain` included, `not_dispatched` excluded), outbox replay, dedupe race, and safe projection.
+- [ ] 1.3 RED: cursor retry/order, worker exclusion/backoff, and user/system RLS boundaries.
+- [ ] 1.4 RED frontend: empty/unread/read, focus/visible polling, LiveKit refresh.
 
 ## Phase 2: Durable backend
 
-- [ ] 2.1 Create additive migration for notifications, webhook receipts, reconciliation cursors/leases, indexes, grants, and RLS.
-- [ ] 2.2 Implement one idempotent user/wallet-scoped ingestion service and safe display projection.
-- [ ] 2.3 Implement authenticated paginated feed and mark-read routes; add isolated raw-body webhook verification and scoped receipt dedupe.
-- [ ] 2.4 Add bounded Solana history pages, overlap-safe cursor persistence, per-wallet exclusion, backoff, startup scheduling, and shutdown cancellation.
-- [ ] 2.5 Emit notification-worthy assistant transitions from committed `conversation_transfer_attempts` updates, keyed by attempt ID + state; publish conversation invalidation only after notification commit. Keep `wallet_operations` a separate optional adapter unless production wiring is added.
+- [ ] 2.1 Create additive migration for notifications, assistant lifecycle outbox, webhook receipts, reconciliation cursors/leases, indexes, grants, and table-specific RLS.
+- [ ] 2.2 Add idempotent owner-scoped ingestion and safe display projection.
+- [ ] 2.3 Add authenticated feed/read API, raw-body signature verifier, scoped receipt dedupe.
+- [ ] 2.4 Add bounded Solana pages, overlap-safe cursors, worker lease, backoff, startup and shutdown.
+- [ ] 2.5 Atomically outbox `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid` attempt states; skip retryable `not_dispatched`.
+- [ ] 2.6 Retry outbox through canonical ingestion; atomically insert notification/complete event; fan out only after winning insert. Keep `wallet_operations` separate.
 
 ## Phase 3: Frontend and integration
 
-- [ ] 3.1 Add typed feed/read API client, notification query, inbox surface, and unread/read affordance.
-- [ ] 3.2 Refresh the feed on focus, bounded visibility polling, and existing LiveKit conversation revision signals.
-- [ ] 3.3 Add fake-provider/RPC Fastify and browser E2E for assistant transfer states and recovered inbound activity without a page reload.
+- [ ] 3.1 Add typed feed API, inbox, unread/read controls.
+- [ ] 3.2 Refresh on focus, 30-second visible polling, and LiveKit revisions.
+- [ ] 3.3 Fastify/browser E2E: assistant states and reconciled inbound event without reload.
 
 ## Phase 4: Verify and deliver
 
-- [ ] 4.1 Run backend lint, typecheck, unit/integration tests, build, migration/RLS tests, and browser E2E; run frontend lint/typecheck/tests/build.
-- [ ] 4.2 Verify exact Privy embedded-Solana event coverage before configuring live webhook subscriptions; document gaps and prove polling recovery.
+- [ ] 4.1 Run backend/frontend lint, typecheck, tests/build, PostgreSQL RLS and browser E2E.
+- [ ] 4.2 Verify Privy embedded-Solana event coverage; document gaps and prove polling recovery before subscription.
 - [ ] 4.3 Record SDD verification, commit by phase, push branch, open one Slice 5 PR, and hand exact SHA to Hermes for testing.

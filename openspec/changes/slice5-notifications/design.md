@@ -2,18 +2,22 @@
 
 ## Technical Approach
 
-Add a PostgreSQL notification inbox and canonical ingestion service for assistant transfer lifecycle, verified webhooks, and Solana history reconciliation. Assistant transfers persist in `conversation_transfer_attempts`; their notification adapter observes committed state transitions and uses attempt ID + state for idempotency. `wallet_operations` belongs to a separate pipeline and is not treated as the assistant's source. The ingestion service resolves local wallet ownership and inserts a safe notification idempotently. Authenticated HTTP endpoints serve the feed. LiveKit remains an invalidation channel after commit; the browser reads durable state over HTTP.
+Add a PostgreSQL inbox and shared ingestion for assistant transfers, signed webhooks, and Solana reconciliation. Assistant states persist in `conversation_transfer_attempts`; a transactional outbox captures each notification-worthy transition. A retrying dispatcher commits notification insertion and outbox completion atomically, deduped by attempt ID + state. `wallet_operations` is a separate pipeline. Authenticated HTTP serves the feed; LiveKit only invalidates after commit.
 
 ## Architecture Decisions
 
-| Decision | Choice | Alternatives and rationale |
+| Decision | Choice | Tradeoff |
 |---|---|---|
-| Source of truth | PostgreSQL ledger | LiveKit/process listeners are transient |
-| Ingestion | Shared normalizer and DB dedupe | Separate writers risk semantic duplicates |
-| Webhook verification | Verify raw bytes before parsing | Parsed-body verification can alter signed bytes |
-| Recovery | Per-wallet cursor and bounded overlap | Webhook-only can miss delivery; balances do not identify events |
-| UI delivery | HTTP feed and LiveKit invalidation | Native push is excluded; existing topic refreshes active sessions |
-| Provider coverage | Enable verified embedded-wallet event types only | Server-wallet docs do not prove embedded-wallet coverage |
+| Source / delivery | PostgreSQL feed; HTTP reads, LiveKit invalidates | Process events are transient; native push excluded |
+| Ingestion | Shared normalizer and DB dedupe | Avoids divergent webhook/poll semantics |
+| Verification | Raw-byte signature check before parsing | Parsed-body verification changes signed bytes |
+| Recovery | Per-wallet cursor with bounded overlap | Webhook-only misses delivery; balances lack identity |
+| Provider scope | Enable verified embedded-wallet events only | Server-wallet docs do not prove embedded coverage |
+| Assistant durability | Transactional outbox with each attempt update | Avoids post-commit crash gap |
+| RLS | Owner-only feed; separate worker policies | Same owner policy blocks global workers |
+| Send failure | Skip retryable `not_dispatched`; notify `uncertain` | No dispatch vs. possibly moved funds |
+
+Per-table RLS details and the 30-second feed interval / 300-second Svix timestamp window are in `03-design-discussion.md`.
 
 ## Data Flow
 
@@ -21,49 +25,49 @@ Add a PostgreSQL notification inbox and canonical ingestion service for assistan
 sequenceDiagram
   participant P as Provider webhook
   participant H as Raw-body verifier
-  participant R as Reconciler / operation hook
+  participant R as Reconciler
   participant I as Canonical ingestion
   participant D as PostgreSQL ledger
+  participant T as Transfer repository
   participant L as LiveKit revision topic
   participant W as Web inbox
   P->>H: signed bytes + delivery ID
   H->>I: verified normalized event
-  R->>I: recovered/operation event
+  R->>I: recovered chain event
+  T->>D: attempt state + outbox row in one transaction
+  D->>I: retryable outbox event
   I->>D: resolve wallet, dedupe, insert safe projection
   D-->>I: committed notification and optional conversation ID
   I->>L: publish invalidation after commit
   W->>D: authenticated list/read HTTP
 ```
 
-The reconciler advances a wallet/network cursor only after canonical page events are durable. Dedupe chain events by network, local wallet, signature, and event class; dedupe webhook replays by provider/account and delivery ID. Dedupe assistant lifecycle events by attempt ID and persisted state. Bounded overlap makes insert-before-cursor crashes safe. A DB lease/advisory lock excludes duplicate wallet runs. Validate RPC retention and rate limits before rollout.
+Advance cursors only after events are durable. Dedupe chain events by network/wallet/signature/class, webhooks by provider/account/delivery ID, and assistant states by attempt ID/state. Overlap permits safe page retry; a DB lease excludes duplicate wallet runs. Verify RPC retention and rate limits before rollout.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
-| `src/db/migrations/013_wallet_notifications.sql` | Create | Notification, receipt, cursor/lease schema and RLS |
-| `src/notifications/*` | Create | Normalize, dedupe, feed, reconcile |
-| `src/api/notifications.ts` | Create | Authenticated feed/read routes |
-| `src/api/provider-webhooks.ts` | Create | Raw-body signature route |
-| `src/server.ts` | Modify | Wire routes, hooks, lifecycle |
-| `src/wallet/solana-devnet-provider.ts` | Modify | Confirmed history pages and cursors |
-| `apps/nana-wallet/src/features/notifications/*` | Create | Feed query and UI |
-| `apps/nana-wallet/src/lib/api.ts` and app navigation | Modify | Feed API and entry point |
+| `src/db/migrations/013_wallet_notifications.sql` | Create | Feed/outbox/receipt/cursor tables, RLS |
+| `src/notifications/*`, `src/api/notifications.ts` | Create | Normalize, ingest, reconcile, feed/read routes |
+| `src/api/provider-webhooks.ts`, `src/server.ts` | Modify | Raw-body ingress and lifecycle wiring |
+| `src/conversations/postgres-repository.ts` | Modify | Atomic assistant outbox writes |
+| `src/wallet/solana-devnet-provider.ts` | Modify | Confirmed history pages |
+| `apps/nana-wallet/src/features/notifications/*`, `src/lib/api.ts` | Create/Modify | Feed client and UI entry point |
 
 ## Interfaces / Contracts
 
-- Feed responses contain notification ID, category/status, safe projection, timestamps, read state, and optional devnet explorer link.
-- Replayed scoped webhook IDs are idempotent; invalid signatures cause no writes.
-- Ingestion receives resolved internal `userId`/`walletId`; payloads cannot supply ownership.
-- Cursor stores a network/signature boundary and uses bounded overlap, not time alone.
+- Feed includes ID, status, safe projection, timestamps, read state, optional devnet link.
+- Invalid signatures have no side effects; scoped webhook and `(user_id, dedupe_key)` replays are no-ops, with fan-out only by the insert winner.
+- Ingestion resolves internal owner/wallet; payload user IDs are ignored. Cursors use signature boundaries with overlap.
 
 ## Testing Strategy
 
 | Layer | What to Test | Approach |
 |---|---|---|
-| Unit | Signature bytes, normalization, dedupe, safe projection, cursors | Vitest RED tests |
-| Integration | RLS, replay, webhook/poll race, cursor failure, operation events | PostgreSQL with two users and fake sources |
-| E2E | Transfer/inbound feed appears without reload; voice topic refreshes | Fastify inject + browser; fake provider, no funds |
+| Unit | Signatures, normalization, dedupe, projection, cursors | Vitest RED tests |
+| Integration | RLS, wallet resolution, replay/race, cursor retry, outbox recovery | PostgreSQL, two users, fake sources |
+| E2E | Transfer/inbound feed without reload; voice refresh | Browser + fake provider; no funds |
 
 ## Threat Matrix
 
@@ -71,11 +75,9 @@ N/A — no routing to external shell commands, subprocesses, VCS automation, exe
 
 ## Migration / Rollout
 
-Additive migration. Deploy schema/routes before ingestion. Start devnet reconciliation with bounded pages and observable cursors. Enable only verified embedded-wallet webhook types; polling remains recovery. Disable both sources to roll back without changing transfer authorization.
+Additive migration; deploy schema/routes before ingestion. Start bounded devnet reconciliation and enable only verified embedded-wallet events. Disable sources and hide the feed to roll back; transfer authorization stays unchanged.
 
 ## Open Questions
 
-- Verify Privy embedded-wallet event types, scope, finality, replay headers, and tenant configuration.
-- Verify RPC retention, pagination, rate limits, polling interval, and overlap size.
-- Decide whether a retryable `not_dispatched` attempt (currently returned to `previewed`) is intentionally notification-free or needs a durable terminal state before it can produce a failure notification.
-- Confirm inbox placement and event grouping at outline review.
+- Verify Privy embedded-wallet event coverage/finality and RPC history retention/pagination/rate limits.
+- Fixed behavior: 30-second visible inbox polling plus focus; Svix-compatible ±300-second timestamp window; synchronized server clock.
