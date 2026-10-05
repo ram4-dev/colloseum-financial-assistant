@@ -36,16 +36,16 @@ Chain strategy: size-exception
 - [x] 2.3 Add authenticated feed/read API, raw-body signature verifier, scoped receipt dedupe.
 - [x] 2.4 Add bounded Solana pages, overlap-safe cursors, worker lease, backoff, startup and shutdown.
 - [x] 2.5 Atomically outbox `submitted`, `uncertain`, `confirmed`, `reverted`, `receipt_invalid` attempt states; skip retryable `not_dispatched`.
-- [ ] 2.6 Retry outbox through canonical ingestion; atomically insert notification/complete event; fan out only after winning insert. Keep `wallet_operations` separate.
+- [x] 2.6 Retry outbox through canonical ingestion; atomically insert notification/complete event; fan out only after winning insert. Keep `wallet_operations` separate.
 
 ## Phase 3: Frontend and integration
 
-- [ ] 3.1 Add typed feed API, inbox, unread/read controls.
-- [ ] 3.2 Refresh on focus, 30-second visible polling, and LiveKit revisions.
-- [ ] 3.3 Fastify/browser E2E: assistant states and reconciled inbound event without reload.
+- [x] 3.1 Add typed feed API, inbox, unread/read controls. — `apps/nana-wallet/src/lib/api.ts` typed feed/read; `useNotificationsFeed` + `/notificaciones` route; frontend lint/typecheck/build pass (20 files, 103 tests).
+- [x] 3.2 Refresh on focus, 30-second visible polling, and LiveKit revisions. — hook polling/focus contract tests green; revision callback wired in `routes/index.tsx`.
+- [x] 3.3 Fastify/browser E2E: assistant states and reconciled inbound event without reload. — `node scripts/run-notifications-browser-e2e.mjs` dispatches real outbox + fake-provider Solana reconciliation, reads both notifications in the UI, verifies both `read_at` values in PostgreSQL (pass).
 
 ## Phase 4: Verify and deliver
 
-- [ ] 4.1 Run backend/frontend lint, typecheck, tests/build, PostgreSQL RLS and browser E2E.
-- [ ] 4.2 Verify Privy embedded-Solana event coverage; document gaps and prove polling recovery before subscription.
-- [ ] 4.3 Record SDD verification, commit by phase, push branch, open one Slice 5 PR, and hand exact SHA to Hermes for testing.
+- [x] 4.1 Run backend/frontend lint, typecheck, tests/build, PostgreSQL RLS and browser E2E. — backend: lint PASS, typecheck clean, 16 notification test files / 73 tests green on isolated DB (schema, RLS, lease, ingestion atomicity, dispatcher rollback/replay/dedupe-loser, reconciliation forward catch-up, webhook receipt-only); frontend: lint/typecheck/build pass, 103 tests; browser E2E pass.
+- [x] 4.2 Verify Privy embedded-Solana event coverage; document gaps and prove polling recovery before subscription. — RESOLVED RECEIPT-ONLY: no Privy embedded-wallet chain-event contract was verifiable from repository research, so webhook ingress persists only a scoped dedupe receipt (no notification/fan-out); reconciliation via fake-RPC source is the proven recovery path (forward catch-up, multi-page drain, lease exclusion, webhook/poll dedupe). Spec + 02-research.md updated.
+- [ ] 4.3 Commit phases 2/3/4, push branch, open one Slice 5 PR, and hand exact SHA to Hermes for testing. The SDD verify report is produced after PR creation and recorded in state.yaml (outside this checklist).

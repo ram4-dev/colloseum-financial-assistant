@@ -13,8 +13,8 @@ specification: complete
 design: complete
 tasks: complete
 independent_outline_review: pass
-apply: in_progress
-verify: pending
+apply: complete
+verify: in_progress
 delivery: pending
 out_of_scope:
   - multi_wallet
