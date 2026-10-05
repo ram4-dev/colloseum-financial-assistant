@@ -1,0 +1,48 @@
+schema: sdd-state/v1
+change: slice3-grant-execution
+artifact_store: openspec
+delivery_strategy: exception-ok
+updated_at: 2026-10-05
+phases:
+  init: completed
+  explore: completed
+  propose: completed
+  spec: completed
+  design: completed
+  tasks: completed
+  apply: not_started
+  verify: not_started
+  archive: not_started
+notes: >
+  Slice 3 of the approved plan at
+  .agent-workflow/tasks/financial-assistant-development/01-propuesta-plan.md.
+  Wire the Slice 1 grant engine into the conversation execution path: a transfer
+  fully covered by an already-active, non-expired, policy-ready grant executes
+  without the second explicit confirmation; everything else degrades closed to
+  preview + explicit confirmation. Q1-Q4 are orchestrator-selected conservative
+  design resolutions within the Ramiro-approved slice scope (execute only when
+  fully covered; fail closed otherwise), revisable at the design gate. Key
+  steers bound into design: eligibility restricted to authenticated original
+  user turn/transcript with explicit transfer intent binding exact amount and
+  resolved recipient (model-produced tool calls keep explicit confirmation this
+  slice; Slice 4 keeps voice-confirmation UX); coverage bound to the original
+  request timestamp so later grants never auto-execute older pending previews;
+  claimConsumption sole atomic authority with structural no-consumedInWindow
+  pre-filter; fail-closed units conversion via provider listTokens decimals;
+  deterministic least-privilege candidate selection with next-candidate claim
+  fallback; idempotency key grant-exec:{userId}:{attemptId} from the persisted
+  preview attempt; covered path reuses the existing `sent` turn-result shape
+  (zero contract delta expected; mirror obligation = no-op assertion). D-2/
+  D-3/D-4/D-7 preserved; no provider signing/submission/finality changes; no
+  LiveKit tool surface changes. PR stacked on
+  origin/slice2-provider-solana-devnet
+  (Slice 2 PR #2 unmerged), merge order Slice 1 -> 2 -> 3. Strict TDD mandated
+  by the user despite config strict_tdd: false (RED first, npm test +
+  npm run typecheck; DB suites must actually run with pgvector compose up).
+  400-line budget risk High resolved by recorded size exception
+  (delivery_strategy: exception-ok). Design gate SATISFIED by Ramiro's explicit
+  no-more-approvals standing instruction and this slice scope authorization
+  (sequential 2->3->4->5, same SDD/TDD/worktree/PR flow); apply proceeds after
+  the parent's bounded artifact consistency review; Hermes PR testing and
+  review remain required post-PR delivery gates.
+---
