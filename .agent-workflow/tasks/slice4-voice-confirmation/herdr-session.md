@@ -78,3 +78,10 @@ updated_at: 2026-10-05
 - Resume tab/pane: `w5:t2N` / `w5:p4M`.
 - Resume session value: `/Users/ramiro/.pi/agent/sessions/--Users-ramiro-Desktop-projects-colloseum.slice4-voice-confirmation--/2026-10-05T07-32-33-427Z_01a10afa-8813-7d28-8d43-2ccae4e3ee6b.jsonl`.
 - Resume status: PR #4 is open, GitHub CI pending, Hermes DB-backed test pending; Pi apply tabs remain intact for continuity.
+
+## Delivery status update (2026-10-05 21:40 UTC)
+
+- Current PR #4 head: `d874f3bb900e3b50e22d5dfaf3319867942631c6`.
+- Marcus monitor reported Hermes verification on the current head at 21:15 UTC: 695 passed, 1 skipped across 88 files; lint and typecheck green. It reported one initial timeout followed by a fully green rerun. Raw logs were not included in the relay.
+- GitHub Actions run `37368402063` attempt 3 is still queued for backend and frontend runners; previous attempt was cancelled after the hosted-runner queue timeout. Current service incident: https://www.githubstatus.com/incidents/3q1yb5m7ltvb.
+- Scope and local worktree preserved; the pre-existing `package-lock.json` modification remains untouched. PR #4 stays open and unmerged.

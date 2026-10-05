@@ -31,6 +31,12 @@ Date: 2026-10-05. Worktree: `colloseum.slice4-voice-confirmation`.
 - DB-backed API/full-suite validation did not complete cleanly. The preconfigured DB URL failed because its configured `ramiro` role does not exist. Retrying against the isolated Slice 3 test DB applied migration 012, but the broad DB suite then reported `api-conversations` and `users-db` sentinel failures and a 60-second timeout in `contacts-cross-user`; the focused `api-contacts` integration also stalled and was stopped. No claims are made that these failures are caused by this slice. Hermes should run the PR's DB-backed tests in its configured environment.
 - No provider-backed LiveKit credentials were provisioned into this local test process; real voice transport was not exercised. The deterministic fake-worker flow and browser contact flow passed.
 
+## Delivery gate update (2026-10-05)
+
+- Hermes monitor report at 2026-10-05 21:15 UTC identifies current Slice 4 head `d874f3b`: 695 tests passed, 1 skipped across 88 files; lint and typecheck passed. The first run had one timeout; the monitor reports the rerun passed. This is a relayed summary; individual raw logs were not attached.
+- GitHub Actions run `37368402063` attempt 3 targets exact head `d874f3bb900e3b50e22d5dfaf3319867942631c6`. At 21:40 UTC, backend and frontend jobs remained queued without runner assignment. The GitHub Status incident is tracked at https://www.githubstatus.com/incidents/3q1yb5m7ltvb.
+- The test handoff, current worktree/session receipt, and final available verification evidence are recorded. No live provider credentials or real transaction were used.
+
 ## Review result
 
 The implemented behavior maps to each Slice 4 acceptance scenario above. The decision gate is bound to the current persisted preview, refuses transcripts whose server event time is not strictly after completed narration, and is consumed once. Address resolution remains ID/version based; chain mismatch, amount policy failure, missing preview ID, and unsupported state fail closed. No unresolved implementation blocker was found in source-to-SDD verification. PR CI and Hermes DB-backed testing remain delivery checks.

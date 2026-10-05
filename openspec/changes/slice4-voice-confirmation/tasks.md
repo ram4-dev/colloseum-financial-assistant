@@ -39,4 +39,4 @@ Rollback: disable Solana voice routing and keep the existing strict preview gate
 
 - [x] 4.1 Commit by phase on branch `slice4-voice-confirmation`; push the verified branch.
 - [x] 4.2 Open reviewable PR #4 against `slice3-grant-execution`; do not merge.
-- [ ] 4.3 Record CI and Hermes test handoff, worktree/session receipt, and final verification.
+- [x] 4.3 Record CI and Hermes test handoff, worktree/session receipt, and final verification. Exact-head Hermes summary is recorded in `04-verification.md`; GitHub Actions run `37368402063` attempt 3 is still queued because hosted runners are unavailable.
