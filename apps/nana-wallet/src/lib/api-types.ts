@@ -92,6 +92,19 @@ export type WalletHistoryResponse = {
   }>;
 };
 
+export type NotificationFeedItem = {
+  id: string;
+  category: string;
+  status: string;
+  title: string;
+  explanation: string | null;
+  resolved: boolean;
+  projection: Record<string, unknown>;
+  createdAt: ISODateTime;
+  eventAt: ISODateTime;
+  readAt: ISODateTime | null;
+};
+
 export type Contact = {
   id: string;
   name: string;

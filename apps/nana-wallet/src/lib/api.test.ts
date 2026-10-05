@@ -110,6 +110,29 @@ describe("conversation API", () => {
   });
 });
 
+describe("notifications API", () => {
+  it("loads the authenticated feed", async () => {
+    const items = [{ id: "notification-1", readAt: null }];
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ ok: true, data: items }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getNotifications()).resolves.toEqual(items);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/notifications");
+  });
+
+  it("marks one encoded feed item as read", async () => {
+    setApiTokenSource({ getToken: async () => "token-x" });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.markNotificationRead("event/id")).resolves.toBeUndefined();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/notifications/event%2Fid/read");
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+});
+
 describe("Privy wallet data", () => {
   it("derives the visible summary from the authenticated Arc USDC balance", async () => {
     vi.stubEnv("VITE_IDENTITY_PROVIDER", "privy");

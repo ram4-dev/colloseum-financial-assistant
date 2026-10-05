@@ -2,24 +2,14 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { api } from "@/lib/api";
+import type { NotificationFeedItem } from "@/lib/api-types";
 
 import { useNotificationsFeed } from "./useNotificationsFeed";
 
 // RED contract shape: the typed feed API (task 3.1) will add this to api-types.
 // Declared locally so the RED test compiles against the not-yet-existing module.
-interface NotificationFeedItem {
-  id: string;
-  category: string;
-  status: string;
-  title: string;
-  body: string;
-  readAt: string | null;
-  createdAt: string;
-  devnetLink?: string;
-}
-
-// The feed API members do not exist yet (RED); the cast keeps test-side typing
-// stable so failures come from the missing module/behavior, not from TS.
+// The feed API members are mocked at the module boundary so these tests prove
+// polling and refresh behavior independently from HTTP parsing.
 const apiMock = api as unknown as {
   getNotifications: Mock<() => Promise<NotificationFeedItem[]>>;
   markNotificationRead: Mock<(id: string) => Promise<void>>;
@@ -31,9 +21,12 @@ function feedItem(overrides: Partial<NotificationFeedItem> = {}): NotificationFe
     category: "assistant_transfer",
     status: "confirmed",
     title: "Transferencia confirmada",
-    body: "Se enviaron 10 USDT",
+    explanation: "Se enviaron 10 USDT",
+    resolved: true,
+    projection: {},
     readAt: null,
     createdAt: "2026-01-01T00:00:00.000Z",
+    eventAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -75,6 +68,21 @@ describe("useNotificationsFeed", () => {
     });
     expect(markRead).toHaveBeenCalledWith(item.id);
     await waitFor(() => expect(result.current.unreadCount).toBe(0));
+  });
+
+  it("keeps the item unread and reports a failed mark-read request", async () => {
+    const item = feedItem();
+    vi.spyOn(apiMock, "getNotifications").mockResolvedValue([item]);
+    vi.spyOn(apiMock, "markNotificationRead").mockRejectedValue(new Error("Network error"));
+    const { result } = renderHook(() => useNotificationsFeed());
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.markRead(item.id);
+    });
+
+    expect(result.current.unreadCount).toBe(1);
+    expect(result.current.error).toEqual(new Error("Network error"));
   });
 
   it("polls every 30 seconds while the page is visible and refreshes on focus", async () => {
@@ -134,7 +142,7 @@ describe("useNotificationsFeed", () => {
       result.current.refreshFromConversationRevision(42);
       result.current.refreshFromConversationRevision(41);
     });
-    await vi.advanceTimersByTimeAsync(50);
+    await waitFor(() => expect(getFeed).toHaveBeenCalledTimes(2));
     expect(getFeed).toHaveBeenCalledTimes(2);
   });
 });

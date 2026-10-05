@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MiPlataRouteImport } from './routes/mi-plata'
+import { Route as NotificacionesRouteImport } from './routes/notificaciones'
 import { Route as PerfilRouteImport } from './routes/perfil'
 
 const IndexRoute = IndexRouteImport.update({
@@ -29,6 +30,11 @@ const MiPlataRoute = MiPlataRouteImport.update({
   path: '/mi-plata',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NotificacionesRoute = NotificacionesRouteImport.update({
+  id: '/notificaciones',
+  path: '/notificaciones',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PerfilRoute = PerfilRouteImport.update({
   id: '/perfil',
   path: '/perfil',
@@ -39,12 +45,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/mi-plata': typeof MiPlataRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/perfil': typeof PerfilRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/mi-plata': typeof MiPlataRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/perfil': typeof PerfilRoute
 }
 export interface FileRoutesById {
@@ -52,20 +60,22 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/mi-plata': typeof MiPlataRoute
+  '/notificaciones': typeof NotificacionesRoute
   '/perfil': typeof PerfilRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/mi-plata' | '/perfil'
+  fullPaths: '/' | '/login' | '/mi-plata' | '/notificaciones' | '/perfil'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/mi-plata' | '/perfil'
-  id: '__root__' | '/' | '/login' | '/mi-plata' | '/perfil'
+  to: '/' | '/login' | '/mi-plata' | '/notificaciones' | '/perfil'
+  id: '__root__' | '/' | '/login' | '/mi-plata' | '/notificaciones' | '/perfil'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
   MiPlataRoute: typeof MiPlataRoute
+  NotificacionesRoute: typeof NotificacionesRoute
   PerfilRoute: typeof PerfilRoute
 }
 
@@ -92,6 +102,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MiPlataRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/notificaciones': {
+      id: '/notificaciones'
+      path: '/notificaciones'
+      fullPath: '/notificaciones'
+      preLoaderRoute: typeof NotificacionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/perfil': {
       id: '/perfil'
       path: '/perfil'
@@ -106,6 +123,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
   MiPlataRoute: MiPlataRoute,
+  NotificacionesRoute: NotificacionesRoute,
   PerfilRoute: PerfilRoute,
 }
 export const routeTree = rootRouteImport

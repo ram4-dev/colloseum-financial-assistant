@@ -23,6 +23,7 @@ import { useConversationState } from "@/features/agent/useConversationState";
 import { createLiveKitWebClient } from "@/features/agent/voice/livekit-web-client";
 import { createRecordedVoiceClient } from "@/features/agent/voice/recorded-voice-client";
 import type { LiveVoiceEvent } from "@/features/agent/voice/live-voice-reducer";
+import { useNotificationsFeed } from "@/features/notifications/useNotificationsFeed";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -64,6 +65,7 @@ function readBlobAsBase64(blob: Blob) {
 function AgentePage() {
   const isNative = Capacitor.isNativePlatform();
   const queryClient = useQueryClient();
+  const notifications = useNotificationsFeed();
   const [text, setText] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
@@ -143,7 +145,10 @@ function AgentePage() {
     onTypedFallback: (reason) => setMessage(reason.message),
   });
   liveDispatchRef.current = liveVoice.dispatch;
-  conversationRevisionRef.current = conversation.refreshRevision;
+  conversationRevisionRef.current = (revision) => {
+    conversation.refreshRevision(revision);
+    notifications.refreshFromConversationRevision(revision);
+  };
   conversationRefreshRef.current = conversation.refresh;
   const sendConversationTurn = useMemo(
     () =>
