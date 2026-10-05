@@ -117,7 +117,11 @@ describe('POST /v1/voice/speak', () => {
     await app.close();
   });
 
-  it('rejects an empty text field', async () => {
+  // CI-only flake: under full-suite parallel load this otherwise-32ms case
+  // timed out at the 5s default in both attempts of GitHub Actions run
+  // 37379832915 at this exact line. It passes alone in ~32ms locally.
+  // 15s gives headroom without masking real regressions.
+  it('rejects an empty text field', { timeout: 15_000 }, async () => {
     process.env.ELEVEN_LABS = 'test-key';
     const app = buildServer();
     const res = await app.inject({
