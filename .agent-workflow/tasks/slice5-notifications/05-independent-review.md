@@ -2,7 +2,7 @@
 
 Status: pending. No Pi/GLM 5.3 review was run in this session.
 
-The exposed tool inventory contains no Herdr/Pi session control, and the attempted local app/browser surfaces in this session were unavailable. This artifact deliberately does not claim an independent review. Required next action: run `/agent-workflow-review` in an observable Herdr Pi session against `04-outline.md`, `03-design-discussion.md`, and `openspec/changes/slice5-notifications/`, save the exact review output and session identity here, resolve findings, then request the HumanLayer design gate.
+The exposed tool inventory contains no Herdr/Pi session control. On the 2026-10-05 continuation audit, CUA reported no available browsers; iTerm2, Dia, and Telegram were listed as running but app access was denied by safety controls. The Telegram bot connector also rejected the Hermes chat handoff with `chat not found`. This artifact deliberately does not claim an independent review. Required next action: make an observable Herdr Pi session available and run `/agent-workflow-review` against `04-outline.md`, `03-design-discussion.md`, and `openspec/changes/slice5-notifications/`; save the exact review output and session identity here, resolve findings, then request the HumanLayer design gate.
 
 Review focus:
 
