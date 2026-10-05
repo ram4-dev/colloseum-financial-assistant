@@ -48,4 +48,4 @@ Show a durable, authenticated activity feed in the web app for assistant-initiat
 
 ## Design gate status
 
-The Slice 5 scope and D-5 are authorized. The technical outline is ready for independent Pi/GLM 5.3 review and then the HumanLayer design gate. The current session exposes no Herdr/Pi session controls, so no independent review has been claimed. Do not start runtime code until that required review/gate is complete. Slices 6–7 remain excluded.
+The Slice 5 scope and D-5 are authorized. Pi/GLM 5.3 completed the independent review at `f4d0aa1`; findings F1–F6 were resolved in `808f0da`. A read-only final check of that corrected SDD is running in Herdr workspace `w5`, tab `w5:t2S`, agent `slice5-outline-final-review`. Keep apply gated until this check confirms no remaining blocker. Slices 6–7 remain excluded.
