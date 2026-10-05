@@ -1,7 +1,7 @@
 change: slice5-notifications
 slice: 5
 title: Durable wallet and assistant notifications
-status: applying
+status: blocked
 base_branch: slice4-voice-confirmation
 implementation_branch: slice5-notifications
 human_approval: scope_and_d5_inherited_from_user_sequence_instruction
@@ -14,8 +14,11 @@ design: complete
 tasks: complete
 independent_outline_review: pass
 apply: complete
-verify: in_progress
-delivery: in_progress
+verify: failed
+delivery: blocked
+verification_evidence_revision: sha256:dbc2932a24154ebe9d6ec2df084af6cd999f8980729ec32c849acd86408cb66c
+verification_report: openspec/changes/slice5-notifications/verify-report.md
+verification_blocker: missing_strict_tdd_cycle_evidence
 out_of_scope:
   - multi_wallet
   - swaps
