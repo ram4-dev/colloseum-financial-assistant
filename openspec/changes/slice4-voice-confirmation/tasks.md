@@ -1,5 +1,11 @@
 # Tasks: Explicit voice confirmation (Slice 4)
 
+## Review Workload Forecast
+
+Estimated changed lines: ~380; risk: High (voice authorization + chain-aware contact migration).
+Delivery: single reviewable PR per slice, as explicitly requested; no stacked child PR.
+Rollback: disable Solana voice routing and keep the existing strict preview gate closed; retain EVM behavior.
+
 ## 1. Strict TDD — tests first
 
 - [ ] 1.1 Unit-test per-preview, one-use voice confirmation/cancellation evidence: final-only, exact phrases including standalone localized yes/sí, narration completion/interruption, transcript ordering, replay, replacement preview, missing evidence, unknown speaker identity, and no parallel generic resolution route.
