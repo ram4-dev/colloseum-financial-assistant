@@ -1,7 +1,7 @@
 change: slice4-voice-confirmation
 slice: 4
 title: Explicit voice confirmation for uncovered Solana transfers
-status: ready_for_apply
+status: ready_for_review
 base_branch: slice3-grant-execution
 implementation_branch: slice4-voice-confirmation
 human_approval: inherited_from_user_sequence_instruction
@@ -13,8 +13,8 @@ specification: complete
 design: complete
 tasks: complete
 independent_outline_review: pass
-apply: ready
-verify: not_started
+apply: complete
+verify: complete
 delivery: not_started
 out_of_scope:
   - multi_wallet
