@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "../db/client.js";
-import { isValidEvmAddress } from "../memory/address.js";
+import { isValidRecipientAddress } from "../memory/address.js";
 import { redactAddressLikeText, vectorLiteral } from "../memory/embedding.js";
 import type { Embedding } from "../memory/types.js";
 
@@ -8,6 +8,7 @@ export type ContactRecord = {
   name: string;
   description: string;
   address: string;
+  network?: 'solana-devnet' | null;
   version: number;
   status: "active" | "inactive";
   createdAt: string;
@@ -18,12 +19,14 @@ export type ContactWriteInput = {
   name: string;
   description: string;
   address: string;
+  network?: 'solana-devnet' | null;
 };
 
 export type ContactPatchInput = {
   name?: string;
   description?: string;
   address?: string;
+  network?: 'solana-devnet' | null;
   expectedVersion: number;
 };
 
@@ -32,6 +35,7 @@ type RecipientRow = {
   name: string;
   description: string;
   address: string;
+  network: 'solana-devnet' | null;
   version: number | string;
   status: string;
   created_at: string | Date;
@@ -50,6 +54,7 @@ function mapRecipient(row: RecipientRow): ContactRecord {
     name: row.name,
     description: row.description,
     address: row.address,
+    ...(row.network === 'solana-devnet' ? { network: 'solana-devnet' as const } : {}),
     version: Number(row.version),
     status: row.status === "active" ? "active" : "inactive",
     createdAt: iso(row.created_at),
@@ -70,7 +75,7 @@ export class ContactsNotFoundError extends Error {}
 export class ContactsConflictError extends Error {}
 
 const RECIPIENT_COLUMNS =
-  "id, name, description, address, version, status, created_at, updated_at";
+  "id, name, description, address, network, version, status, created_at, updated_at";
 
 /**
  * User-surface contacts repository (PMU-008..013): recipient CRUD for the HTTP
@@ -101,13 +106,13 @@ export class ContactsRepository {
     embeddingModelRevision: string,
   ): Promise<ContactRecord> {
     const name = this.validatedName(input.name);
-    if (!isValidEvmAddress(input.address)) {
-      throw new ContactsValidationError("address must be a valid EVM address");
+    if (!isValidRecipientAddress(input.address, input.network)) {
+      throw new ContactsValidationError("address must match the selected network");
     }
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<RecipientRow>(
-        `INSERT INTO recipients (user_id, name, normalized_name, description, address, embedding, embedding_model_revision, provenance, address_confirmed_at)
-         VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8::jsonb, now())
+        `INSERT INTO recipients (user_id, name, normalized_name, description, address, network, embedding, embedding_model_revision, provenance, address_confirmed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9::jsonb, now())
          RETURNING ${RECIPIENT_COLUMNS}`,
         [
           userId,
@@ -117,6 +122,7 @@ export class ContactsRepository {
           normalizedContactName(name),
           redactAddressLikeText(input.description).trim(),
           input.address.trim(),
+          input.network ?? null,
           vectorLiteral(embedding),
           embeddingModelRevision,
           JSON.stringify({ origin: "user" }),
@@ -140,13 +146,11 @@ export class ContactsRepository {
     embedding: Embedding,
     embeddingModelRevision: string,
   ): Promise<ContactRecord> {
-    if (input.address !== undefined && !isValidEvmAddress(input.address)) {
-      throw new ContactsValidationError("address must be a valid EVM address");
-    }
     const contentChanged =
       input.name !== undefined ||
       input.description !== undefined ||
-      input.address !== undefined;
+      input.address !== undefined ||
+      Object.prototype.hasOwnProperty.call(input, 'network');
     return this.database.withUserTransaction(userId, async (client) => {
       // Lock the current projection for the expected-version check.
       const current = await client.query<RecipientRow>(
@@ -162,8 +166,8 @@ export class ContactsRepository {
         throw new ContactsConflictError();
 
       await client.query(
-        `INSERT INTO recipient_versions (recipient_id, user_id, version, name, description, address)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO recipient_versions (recipient_id, user_id, version, name, description, address, network)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
           row.id,
           userId,
@@ -171,6 +175,7 @@ export class ContactsRepository {
           row.name,
           row.description,
           row.address,
+          row.network ?? null,
         ],
       );
 
@@ -181,12 +186,18 @@ export class ContactsRepository {
           ? redactAddressLikeText(input.description).trim()
           : row.description;
       const nextAddress = input.address?.trim() ?? row.address;
+      const nextNetwork = Object.prototype.hasOwnProperty.call(input, 'network')
+        ? input.network
+        : row.network ?? undefined;
+      if (!isValidRecipientAddress(nextAddress, nextNetwork)) {
+        throw new ContactsValidationError("address must match the selected network");
+      }
       const updated = await client.query<RecipientRow>(
         `UPDATE recipients
          SET name = $3, normalized_name = $4, description = $5,
-             address = $6,
-             embedding = $7::vector,
-             embedding_model_revision = $8,
+             address = $6, network = $7,
+             embedding = $8::vector,
+             embedding_model_revision = $9,
              version = version + 1,
              updated_at = now()
          WHERE user_id = $1 AND id = $2
@@ -198,6 +209,7 @@ export class ContactsRepository {
           normalizedContactName(nextName),
           nextDescription,
           nextAddress,
+          nextNetwork ?? null,
           // Regenerate the embedding whenever any embedded field changes so
           // agent retrieval reflects the current projection.
           contentChanged ? vectorLiteral(embedding) : vectorLiteral(embedding),

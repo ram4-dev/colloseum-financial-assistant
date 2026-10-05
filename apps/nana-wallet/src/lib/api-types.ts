@@ -97,6 +97,7 @@ export type Contact = {
   name: string;
   description: string;
   address: string;
+  network?: "solana-devnet";
   version: number;
   status: "active" | "inactive";
   createdAt: ISODateTime;
@@ -107,12 +108,14 @@ export type CreateContactInput = {
   name: string;
   description: string;
   address: string;
+  network?: "solana-devnet";
 };
 
 export type UpdateContactInput = {
   name?: string;
   description?: string;
   address?: string;
+  network?: "solana-devnet" | null;
   expectedVersion: number;
 };
 

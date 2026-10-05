@@ -30,6 +30,7 @@ export function AddTrustedRecipient({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+  const [network, setNetwork] = useState<"evm" | "solana-devnet">("evm");
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -42,6 +43,7 @@ export function AddTrustedRecipient({
   function resetForm() {
     setName("");
     setAddress("");
+    setNetwork("evm");
     setError(null);
   }
 
@@ -60,7 +62,12 @@ export function AddTrustedRecipient({
     setIsSaving(true);
     setError(null);
     try {
-      await api.createContact({ name: cleanName, description: "", address: cleanAddress });
+      await api.createContact({
+        name: cleanName,
+        description: "",
+        address: cleanAddress,
+        ...(network === "solana-devnet" ? { network: "solana-devnet" } : {}),
+      });
       await queryClient.invalidateQueries({ queryKey: queryKeys.contacts(userId) });
       onContactsChanged?.();
       resetForm();
@@ -123,6 +130,18 @@ export function AddTrustedRecipient({
             placeholder="Dirección o CBU"
             aria-label="Dirección"
           />
+          <label className="block space-y-1 text-sm font-bold" htmlFor="trusted-recipient-network">
+            Red de la dirección
+            <select
+              id="trusted-recipient-network"
+              value={network}
+              onChange={(event) => setNetwork(event.target.value as "evm" | "solana-devnet")}
+              className="min-h-12 w-full rounded-xl border border-input bg-background px-3 text-base"
+            >
+              <option value="evm">EVM (red configurada)</option>
+              <option value="solana-devnet">Solana devnet</option>
+            </select>
+          </label>
           {error ? (
             <p className="text-base font-bold text-destructive" role="alert">
               {error}
@@ -158,6 +177,9 @@ export function AddTrustedRecipient({
             <li key={contact.id} className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-base font-bold">{contact.name}</p>
+                {contact.network === "solana-devnet" ? (
+                  <p className="text-xs font-bold text-brand-ink">Solana devnet</p>
+                ) : null}
                 <p className="truncate text-sm text-muted-foreground">{contact.address}</p>
               </div>
               <Button

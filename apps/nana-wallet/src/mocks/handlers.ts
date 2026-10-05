@@ -490,6 +490,7 @@ export const handlers = [
       name: input.name,
       description: input.description,
       address: input.address,
+      ...(input.network ? { network: input.network } : {}),
       version: 1,
       status: "active",
       createdAt: now,
@@ -511,11 +512,15 @@ export const handlers = [
         409,
       );
     }
+    const { network: currentNetwork, ...currentWithoutNetwork } = current;
+    const networkWasProvided = Object.prototype.hasOwnProperty.call(input, "network");
     const updated: Contact = {
-      ...current,
+      ...currentWithoutNetwork,
       name: input.name ?? current.name,
       description: input.description ?? current.description,
       address: input.address ?? current.address,
+      ...(!networkWasProvided && currentNetwork ? { network: currentNetwork } : {}),
+      ...(input.network === "solana-devnet" ? { network: input.network } : {}),
       version: current.version + 1,
       updatedAt: new Date().toISOString(),
     };

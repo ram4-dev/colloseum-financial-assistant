@@ -43,7 +43,7 @@ import {
   type ConversationSession,
 } from '../conversations/session-state.js';
 import { createRecipientMemoryTools } from '../memory/tools.js';
-import { isValidEvmAddress } from '../memory/address.js';
+import { isValidEvmAddress, isValidRecipientAddress } from '../memory/address.js';
 import { getConfiguredRecipientMemoryRuntime, type RecipientMemoryRuntime } from '../memory/runtime.js';
 import { resolveTransferRecipient, type RecipientMemoryToolPort } from './recipient-resolution.js';
 import { hasExplicitTransferAddress } from './recipient-intent.js';
@@ -179,7 +179,8 @@ function validateLiveTransferPolicy(
       'Live transfer policy is invalid: WDK_MAX_TRANSFER_AMOUNT must be a positive plain decimal.',
     );
   }
-  if (allowedRecipients.some((address) => !isValidEvmAddress(address) || isBurnAddress(address))) {
+  const solana = input.network === 'solana-devnet';
+  if (allowedRecipients.some((address) => !isValidRecipientAddress(address, solana ? 'solana-devnet' : undefined) || (!solana && isBurnAddress(address)))) {
     return rejectByPolicy(
       'Live transfer policy is invalid: WDK_ALLOWED_RECIPIENTS must contain only valid non-burn EVM addresses.',
     );
@@ -199,20 +200,21 @@ function validateLiveTransferPolicy(
   if (!parsedAmount) {
     return rejectByPolicy('Refusing live transfer: amount must be a positive plain decimal.');
   }
+  if (solana && ((input.amount.split('.')[1]?.length ?? 0) > 9 || (maxAmount.split('.')[1]?.length ?? 0) > 9)) {
+    return rejectByPolicy('Refusing live transfer: SOL amounts must have at most 9 decimal places.');
+  }
   if (compareDecimals(parsedAmount, parsedMaxAmount) > 0) {
     return rejectByPolicy('Refusing live transfer: amount exceeds WDK_MAX_TRANSFER_AMOUNT.');
   }
 
-  if (!isValidEvmAddress(input.to)) {
-    return rejectByPolicy('Refusing live transfer: recipient must be a valid EVM address.');
+  if (!isValidRecipientAddress(input.to, solana ? 'solana-devnet' : undefined)) {
+    return rejectByPolicy('Refusing live transfer: recipient must match the configured network.');
   }
-  if (isBurnAddress(input.to)) {
+  if (!solana && isBurnAddress(input.to)) {
     return rejectByPolicy('Refusing live transfer: zero and burn addresses are prohibited.');
   }
-  const normalizedRecipient = input.to.toLocaleLowerCase('en-US');
-  const allowlist = new Set(
-    allowedRecipients.map((address) => address.toLocaleLowerCase('en-US')),
-  );
+  const allowlist = new Set(solana ? allowedRecipients : allowedRecipients.map((address) => address.toLocaleLowerCase('en-US')));
+  const normalizedRecipient = solana ? input.to : input.to.toLocaleLowerCase('en-US');
   if (!allowlist.has(normalizedRecipient)) {
     return rejectByPolicy('Refusing live transfer: recipient is not in WDK_ALLOWED_RECIPIENTS.');
   }
