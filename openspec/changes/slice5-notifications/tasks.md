@@ -25,7 +25,7 @@ Chain strategy: size-exception
 ## Phase 1: RED contracts
 
 - [ ] 1.1 Add RED tests for raw-byte signature failure, timestamp/replay rejection, provider identity-to-wallet ownership, and no side effects on invalid webhook.
-- [ ] 1.2 Add RED tests for canonical event normalization, operation-state notification, webhook/poll overlap dedupe, per-user RLS, and safe projection.
+- [ ] 1.2 Add RED tests for canonical event normalization, `conversation_transfer_attempts` state notification/idempotency, webhook/poll overlap dedupe, per-user RLS, and safe projection.
 - [ ] 1.3 Add RED tests for cursor overlap, page failure without cursor advance, concurrent wallet reconciliation exclusion, and RPC rate-limit backoff.
 - [ ] 1.4 Add RED frontend tests for empty/unread/read feed, focus refresh, visible-page polling, and LiveKit invalidation refresh.
 
@@ -35,7 +35,7 @@ Chain strategy: size-exception
 - [ ] 2.2 Implement one idempotent user/wallet-scoped ingestion service and safe display projection.
 - [ ] 2.3 Implement authenticated paginated feed and mark-read routes; add isolated raw-body webhook verification and scoped receipt dedupe.
 - [ ] 2.4 Add bounded Solana history pages, overlap-safe cursor persistence, per-wallet exclusion, backoff, startup scheduling, and shutdown cancellation.
-- [ ] 2.5 Emit notification-worthy assistant operation transitions after durable operation updates; publish conversation invalidation only after notification commit.
+- [ ] 2.5 Emit notification-worthy assistant transitions from committed `conversation_transfer_attempts` updates, keyed by attempt ID + state; publish conversation invalidation only after notification commit. Keep `wallet_operations` a separate optional adapter unless production wiring is added.
 
 ## Phase 3: Frontend and integration
 

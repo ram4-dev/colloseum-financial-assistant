@@ -7,21 +7,21 @@ Show a durable, authenticated activity feed in the web app for assistant-initiat
 ## Bound decisions
 
 - D-5 from Ramiro: signed provider webhooks plus polling reconciliation; publish revisions through the existing `revision-publisher`/`conversation_state_changed` topic. No native push in this slice.
-- One canonical notification is produced regardless of whether an underlying event came from a webhook, an operation state change, or reconciliation. Source-specific receipt details remain internal.
+- One canonical notification is produced regardless of whether an underlying chain event came from a webhook or reconciliation. Assistant transfer lifecycle notifications are derived from durable `conversation_transfer_attempts` state transitions, not process-local task events. `wallet_operations` is a separate pipeline and is not assumed to represent assistant transfers. Source-specific receipt details remain internal.
 - A notification is scoped to the resolved wallet owner. API reads and mutations require authenticated identity and RLS/user predicates.
 - The feed is available outside an active voice session. Read state is per user; delivery state is not inferred from LiveKit.
 
 ## Product questions / assumptions to confirm at the outline gate
 
 1. “Relevant” inbound activity means confirmed SOL and SPL-token deposits visible from the user's one enrolled Solana wallet; spam-token filtering and pricing are excluded.
-2. Send notifications for operation states `submitted`, `confirmed`, and terminal failure/revert; avoid a separate notification for every transient polling observation.
+2. Send notifications for persisted assistant attempt states `submitted`, `confirmed`, `reverted`, and `receipt_invalid`; avoid a separate notification for every transient polling observation. `not_dispatched` currently returns the attempt to `previewed`, so decide at outline review whether it is intentionally excluded as retryable or needs a durable terminal state first.
 3. Show time, asset/amount when known, direction, status, and a devnet explorer link; never expose provider payloads, webhook secrets, authorization headers, signing details, or unnecessary counterparties.
 4. The feed may refresh on page focus and bounded interval while visible, while LiveKit revision events trigger immediate refresh. Browser notifications and native push are excluded.
 
 ## Technical shape
 
 - Add a notification ledger with unique `(user_id, dedupe_key)`, category/status, safe projection JSON, optional `wallet_id`, `operation_id`, `conversation_id`, event timestamp, created/read timestamps, and RLS. Add reconciliation cursor state per wallet/network.
-- Add a single ingestion service that validates ownership and normalized event fields, deduplicates transaction/source events, inserts notification(s), then publishes conversation revision invalidation where a conversation is attached. A durable insert must succeed before fan-out.
+- Add a single ingestion service that validates ownership and normalized event fields, deduplicates transaction/source events, inserts notification(s), then publishes conversation revision invalidation where a conversation is attached. For assistant transitions, use the `conversation_transfer_attempts` ID + persisted state as the idempotency identity. A durable insert must succeed before notification fan-out; existing conversation state revisions remain an independent refresh signal.
 - Add an authenticated paginated feed/read API. A webhook route is separate from identity-authenticated routes, verifies raw bytes using the provider signature contract, resolves provider wallet identity to the local wallet, and never trusts a user ID from payload.
 - Add a bounded reconciliation loop with one active run per wallet, persisted cursors, page limits, overlap-safe re-reading, backoff, and shutdown cancellation. It queries Solana RPC/provider history for confirmed signatures; webhook ingestion and operation lifecycle ingestion share dedupe rules.
 - Add an activity/feed surface in the existing web app. Fetch on mount/focus and bounded visible-page interval; show unread state and allow mark-read. When an active conversation receives LiveKit `conversation_state_changed`, refresh its conversation and relevant feed state.

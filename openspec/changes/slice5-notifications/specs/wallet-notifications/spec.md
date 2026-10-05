@@ -14,6 +14,7 @@ The system MUST persist notification projections for relevant assistant-initiate
 - **GIVEN** an authenticated user initiates a transfer through an active grant or explicit confirmation
 - **WHEN** the operation reaches submitted, confirmed, or terminal failure/revert
 - **THEN** the system persists one safe notification per canonical operation state
+- **AND** assistant transfer state is sourced from its durable `conversation_transfer_attempts` record, not an in-process task event
 - **AND** the user can retrieve it from the feed outside LiveKit.
 
 #### Scenario: Inbound event is recovered

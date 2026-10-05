@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-Add a PostgreSQL notification inbox and canonical ingestion service for operation lifecycle events, verified webhooks, and Solana history reconciliation. It resolves local wallet ownership and inserts a safe notification idempotently. Authenticated HTTP endpoints serve the feed. LiveKit remains an invalidation channel after commit; the browser reads durable state over HTTP.
+Add a PostgreSQL notification inbox and canonical ingestion service for assistant transfer lifecycle, verified webhooks, and Solana history reconciliation. Assistant transfers persist in `conversation_transfer_attempts`; their notification adapter observes committed state transitions and uses attempt ID + state for idempotency. `wallet_operations` belongs to a separate pipeline and is not treated as the assistant's source. The ingestion service resolves local wallet ownership and inserts a safe notification idempotently. Authenticated HTTP endpoints serve the feed. LiveKit remains an invalidation channel after commit; the browser reads durable state over HTTP.
 
 ## Architecture Decisions
 
@@ -35,7 +35,7 @@ sequenceDiagram
   W->>D: authenticated list/read HTTP
 ```
 
-The reconciler advances a wallet/network cursor only after canonical page events are durable. Dedupe chain events by network, local wallet, signature, and event class; dedupe webhook replays by provider/account and delivery ID. Bounded overlap makes insert-before-cursor crashes safe. A DB lease/advisory lock excludes duplicate wallet runs. Validate RPC retention and rate limits before rollout.
+The reconciler advances a wallet/network cursor only after canonical page events are durable. Dedupe chain events by network, local wallet, signature, and event class; dedupe webhook replays by provider/account and delivery ID. Dedupe assistant lifecycle events by attempt ID and persisted state. Bounded overlap makes insert-before-cursor crashes safe. A DB lease/advisory lock excludes duplicate wallet runs. Validate RPC retention and rate limits before rollout.
 
 ## File Changes
 
@@ -77,4 +77,5 @@ Additive migration. Deploy schema/routes before ingestion. Start devnet reconcil
 
 - Verify Privy embedded-wallet event types, scope, finality, replay headers, and tenant configuration.
 - Verify RPC retention, pagination, rate limits, polling interval, and overlap size.
+- Decide whether a retryable `not_dispatched` attempt (currently returned to `previewed`) is intentionally notification-free or needs a durable terminal state before it can produce a failure notification.
 - Confirm inbox placement and event grouping at outline review.
