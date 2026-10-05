@@ -77,4 +77,5 @@ disables the selector and leaves fail-closed behavior.
 - [x] 5.1 Add RED coverage for missing, empty, and whitespace-only preview IDs; prove no blockhash RPC or signing occurs.
 - [x] 5.2 Remove the timestamp-generated reference fallback and return `not_dispatched` before any signing path.
 - [x] 5.3 Run exact-branch focused/static/build and relevant integration/E2E checks; record results.
-- [ ] 5.4 Push the fix to PR #2 and hand the exact head SHA to Hermes for configured DB/provider testing.
+- [x] 5.4 Push the fix to PR #2; backend and frontend CI passed at `cbb699c`.
+- [ ] 5.5 Hermes configured retest of exact PR head `cbb699c` remains pending.

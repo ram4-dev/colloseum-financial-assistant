@@ -9,6 +9,7 @@
 
 - `DATABASE_URL=postgres://postgres@127.0.0.1:55442/wdk_agent?... DEMO_USER_ID=00000000-0000-4000-8000-000000000001 npm test -- tests/integration/wallets-transfer.test.ts`: 7/7 passed against an isolated Postgres 16 container after migrations.
 - `npm run test:e2e:livekit-fake`: 3/3 passed.
+- GitHub Actions for exact PR head `cbb699c`: backend lint/typecheck/tests/Docker startup tests/evals passed; frontend lint/typecheck/tests passed.
 - Full backend suite with DB URL: 801 passed, 10 failed, 10 skipped. The local DB was initialized differently from CI; failures were missing `extensions` schema / `DEMO_USER_ID`, existing contacts/conversation tests timing out, and known demo-sentinel setup. The focused transfer integration passed after matching the CI search path and sentinel settings. Full CI on the pre-fix PR head was green; exact new SHA is pending GitHub/Hermes retest.
 - No real Privy signer call or devnet transfer was made.
 
@@ -26,7 +27,7 @@
 ## Manual checks and remaining items
 
 - Confirm no generated `reference_id` remains in Solana dispatch and the exact persisted preview ID is still used: source review passed.
-- Hermes: rerun the configured PR test set after push; this is assigned to Hermes by Ramiro.
+- Hermes: configured retest of exact PR head `cbb699c` is still assigned to Hermes by Ramiro.
 - Live devnet signer/policy readback and a human-approved devnet signature remain deferred by the Slice 2 plan.
 
 ## Deviations and next owner
