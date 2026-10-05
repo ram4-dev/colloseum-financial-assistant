@@ -155,7 +155,11 @@ export function createInMemoryConversationRepository(
       snapshot = { ...snapshot, transferResolutionState: 'broadcasting', revision: snapshot.revision + 1 };
       const claimed = snapshot.pendingTransfer;
       if (!claimed) return { status: 'missing' as const };
-      return { status: 'claimed' as const, transfer: { ...claimed, previewId: claimed.previewId! } };
+      return {
+        status: 'claimed' as const,
+        claimId: 'eval-fixture-claim',
+        transfer: { ...claimed, previewId: claimed.previewId! },
+      };
     },
     async releasePendingTransferClaim() {
       transferStatus = 'previewed';

@@ -71,3 +71,11 @@ disables the selector and leaves fail-closed behavior.
 
 - 3.4 Live Privy readback was unavailable (environment-gated).
 - 3.5 A human-approved devnet signature is pending; none was signed/submitted.
+
+## Retry review remediation
+
+- [x] 5.1 Add RED coverage for missing, empty, and whitespace-only preview IDs; prove no blockhash RPC or signing occurs.
+- [x] 5.2 Remove the timestamp-generated reference fallback and return `not_dispatched` before any signing path.
+- [x] 5.3 Run exact-branch focused/static/build and relevant integration/E2E checks; record results.
+- [x] 5.4 Push the fix to PR #2; backend and frontend CI passed at `cbb699c`.
+- [ ] 5.5 Hermes configured retest of exact PR head `cbb699c` remains pending.

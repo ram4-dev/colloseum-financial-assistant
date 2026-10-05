@@ -237,6 +237,9 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
             // authority; same grants service as the HTTP lifecycle.
             grantLedger: {
               claim: (input) => grants.claimConsumption(input),
+              // AD-10: atomic owned-CAS settlement (attempt CAS + ledger
+              // release + released audit) for definitive non-dispatch.
+              settle: (input) => grants.settleGrantReservation(input),
             },
           }
         : {}),
