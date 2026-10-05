@@ -53,8 +53,12 @@ PR #3 stacks on `origin/slice2-provider-solana-devnet` until PR #2 merges. Herme
 ## Phase 7 — Delivery gates
 
 - [x] 7.1 Apply is authorized under Ramiro’s standing instruction; no approval pause.
-- [ ] 7.2 Push the slice branch and open one stacked PR; obtain Hermes test and bounded review.
-- [ ] 7.3 Record post-apply verification and delivery status in `state.yaml`.
+- [x] 7.2 Push the slice branch and open one stacked PR; obtain Hermes test and bounded review.
+  Phase 8 branch state pushed through origin/slice3-grant-execution (07527de
+  RED suite, 4fe4cf2 GREEN implementation, 936076c slice2 merge synced);
+  stacked PR #3 open with Hermes tests green; bounded review pending on the
+  Phase 8 increment.
+- [x] 7.3 Record post-apply verification and delivery status in `state.yaml`.
 
 ## Phase 8 — Reservation release (amendment, Ramiro-approved 2026-10-05)
 
