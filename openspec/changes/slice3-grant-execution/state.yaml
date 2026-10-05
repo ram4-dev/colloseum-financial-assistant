@@ -11,7 +11,7 @@ phases:
   design: completed
   tasks: completed
   apply: completed
-  verify: in_progress
+  verify: completed
   archive: not_started
 notes: >
   Slice 3 of the approved plan at
