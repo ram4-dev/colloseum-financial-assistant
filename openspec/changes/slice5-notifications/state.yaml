@@ -16,9 +16,9 @@ independent_outline_review: pass
 apply: complete
 verify: failed
 delivery: blocked
-verification_evidence_revision: sha256:dbc2932a24154ebe9d6ec2df084af6cd999f8980729ec32c849acd86408cb66c
+verification_evidence_revision: >-
+  sha256:dbc2932a24154ebe9d6ec2df084af6cd999f8980729ec32c849acd86408cb66c
 verification_report: openspec/changes/slice5-notifications/verify-report.md
-verification_blocker: missing_strict_tdd_cycle_evidence
 out_of_scope:
   - multi_wallet
   - swaps

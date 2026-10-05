@@ -28,7 +28,7 @@ updated_at: "2026-10-05"
 ## Created topology
 
 | Resource | ID | Label or role | Pre-existing | Closed |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | tab | `w5:t2T` | `slice5-notifications-apply` | no | no |
 | pane | `w5:p4S` | Pi SDD apply | no | no |
 
@@ -58,4 +58,17 @@ updated_at: "2026-10-05"
 - Closed tab IDs: pending
 - Post-close tab-list evidence: pending
 - Resume cwd: `/Users/ramiro/Desktop/projects/colloseum.slice5-notifications`
-- Resume session value: pending
+- Resume tab: `w5:t36` (`slice5-sdd-reconcile`)
+- Resume pane: `w5:p55`
+- Resume session value: `/Users/ramiro/.pi/agent/sessions/--Users-ramiro-Desktop-projects-colloseum.slice5-notifications--/2026-10-05T09-47-45-174Z_01a10b76-4e96-7665-816b-07c52748d541.jsonl`
+
+## Resume session — SDD reconciliation (2026-10-05, later)
+
+- Resume tab/pane: `w5:t36` / `w5:p55` (`slice5-sdd-reconcile`); original apply tab/pane (`w5:t2T`/`w5:p4S`) untouched.
+- Scope: documentation/evidence reconciliation only; no product code changed.
+- Branch `slice5-notifications`: PR #5 head `b83695cdebaadee74fb700681b3fd1cd96495d18`; local docs commit `b7f7338` (herdr receipt only).
+- Hermes (relayed evidence): 731 passed / 1 skipped across 97 files; lint and typecheck green at PR head `b83695c`.
+- Local independent verification: focused notification backend 77/77 (18 files), frontend 103/103 (20 files), browser E2E pass; lint/typecheck/build/evals pass. Full backend exits 1 on four unrelated contacts timeouts under contention (986 passed, 10 skipped) — this keeps `verify: failed` / `delivery: blocked`.
+- GitHub Actions: run `37368415984` for current head `b83695c` still QUEUED (no green claim). Prior green run `37365226086` was on `23f6562`. PR #4 head `0d74517` has green run `37377461929`.
+- Limits preserved: no live/devnet signer operations, no monitor restarts, no product-code edits, no marking of deferred evidence as completed.
+- `state.yaml`: obsolete `verification_blocker: missing_strict_tdd_cycle_evidence` removed (evidence exists at `eed53b0`); `verify: failed` / `delivery: blocked` retained pending a green full-backend run.

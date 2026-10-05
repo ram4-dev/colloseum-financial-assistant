@@ -1,17 +1,17 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
-evidence_revision: sha256:dbc2932a24154ebe9d6ec2df084af6cd999f8980729ec32c849acd86408cb66c
-verdict: pass
-blockers: 0
-critical_findings: 0
+evidence_revision: sha256:d361f2fbf3343452e8a9538f8c1a66445289a4c4ebb2e6c54bb6444036485372
+verdict: fail
+blockers: 1
+critical_findings: 1
 requirements: 6/6
 scenarios: 14/14
-test_command: "DATABASE_URL=postgresql://postgres@127.0.0.1:5433/wdk_agent_verify_slice5_final?options=-csearch_path%3Dpublic,extensions DEMO_USER_ID=00000000-0000-4000-8000-000000000001 npm test -- tests/unit/notifications tests/integration/notifications*.test.ts && (cd apps/nana-wallet && npm test) && NODE_EXTRA_CA_CERTS=/Users/ramiro/.portless/ca.pem NANA_E2E_DB_CONTAINER=colloseumslice5-notifications-db-1 NANA_E2E_DB_NAME=wdk_agent_verify_slice5_final NANA_E2E_DATABASE_URL=postgresql://postgres@127.0.0.1:5433/wdk_agent_verify_slice5_final?options=-csearch_path%3Dpublic,extensions NANA_E2E_BACKEND_PORT=3141 NANA_E2E_PORTLESS_NAME=slice5-notifications-verify npm run test:e2e:notifications"
-test_exit_code: 0
-test_output_hash: sha256:fb4dee3fe9841146175c688d3154a427efdef7e9072fc0fde55e8ec3389151af
+test_command: "DATABASE_URL=postgresql://postgres@127.0.0.1:55447/wdk_agent?options=-csearch_path%3Dpublic,extensions DEMO_USER_ID=00000000-0000-4000-8000-000000000001 npm test -- --maxWorkers=1"
+test_exit_code: 1
+test_output_hash: sha256:4f5773227acd518c4b9a79999b1f91ab1b5a6d04d11cdae19f48d793491dee38
 build_command: "npm run lint && npm run typecheck && npm run build && npm run eval && (cd apps/nana-wallet && npm run lint && npm run typecheck && npm run build)"
 build_exit_code: 0
-build_output_hash: sha256:45ba33d913493ff9d8672cd17b90bb9e9c3b5370b77e143d6d56122d716d9250
+build_output_hash: sha256:d5c0f01648080b7d7bd0e3af1b6b6966829993c5460fc17397f6b0522127ac60
 ```
 
 # Verification Report
@@ -21,11 +21,12 @@ build_output_hash: sha256:45ba33d913493ff9d8672cd17b90bb9e9c3b5370b77e143d6d5612
 | Change | slice5-notifications |
 | Version | N/A |
 | Mode | Strict TDD |
-| Verified candidate | `e18d8c17f72b5c5961ebb6b1e3dc59961e01b803` (PR #5) |
+| Verified remote candidate | `b83695cdebaadee74fb700681b3fd1cd96495d18` (PR #5) |
+| Equivalent local product tree | `b7f733863ae33687f48c7d397a84e0fcf9ab1a0f` differs only by `.agent-workflow/tasks/slice5-notifications/herdr-session.md` |
 
-The implementation satisfies all six requirements and all fourteen scenarios. The sole prior verification blocker — the missing Strict TDD evidence artifact — was resolved by recording the canonical `apply-progress.md` with the per-task TDD Cycle Evidence table recovered from the phase history (`eed53b0`). No product-code defect was found at any point.
+All six requirements and fourteen scenarios have passing focused runtime coverage on the current product tree. Final verification still fails because the required full backend test command exits non-zero: four contacts integration tests time out, including when run alone, although no Slice 5 notification test fails.
 
-### Completeness
+## Completeness
 
 | Metric | Value |
 | --- | ---: |
@@ -35,83 +36,79 @@ The implementation satisfies all six requirements and all fourteen scenarios. Th
 | Requirements compliant | 6/6 |
 | Scenarios compliant | 14/14 |
 
-### Build and Test Execution
+## Build and Tests Execution
 
 | Check | Exit | Result | Exact output hash |
 | --- | ---: | --- | --- |
-| Backend lint, typecheck, build, and evals; frontend lint, typecheck, and build | 0 | PASS | `sha256:45ba33d913493ff9d8672cd17b90bb9e9c3b5370b77e143d6d56122d716d9250` |
-| Focused backend notifications on a fresh CI-shaped PostgreSQL database, full frontend tests, focused browser E2E | 0 | PASS | `sha256:fb4dee3fe9841146175c688d3154a427efdef7e9072fc0fde55e8ec3389151af` |
+| Backend lint, typecheck, build, evals; frontend lint, typecheck, build | 0 | PASS | `sha256:d5c0f01648080b7d7bd0e3af1b6b6966829993c5460fc17397f6b0522127ac60` |
+| Full backend, one worker, CI-shaped PostgreSQL | 1 | FAIL: 4 contacts timeouts; 986 passed, 10 skipped | `sha256:4f5773227acd518c4b9a79999b1f91ab1b5a6d04d11cdae19f48d793491dee38` |
+| Focused Slice 5 backend | 0 | PASS: 18 files, 77 tests | `sha256:b07ec856e6ac0667d8c5b20c9940d6ed11e3011128dfc17c4ead2f18a1eedcdc` |
+| Full frontend | 0 | PASS: 20 files, 103 tests | `sha256:57e1a9adbcb37629294fc51eef80600380515452ef14f0a1b5ca75575d020e0e` |
+| Clean-database browser E2E | 0 | PASS | `sha256:ec52f3d439075cc57d5e9f17a9cb41df1676843daa5c22534391ce183d974b18` |
 
-Runtime results:
+The fresh database used the CI schema sequence: `CREATE SCHEMA extensions`, `supabase/roles.sql`, then all Supabase migrations. A first parallel run was invalid because the initial local migration path lacked CI's `extensions` schema and created contention; it is excluded from the canonical evidence above. A first browser run reused data left by the full suite and produced two legitimate same-title notifications; the canonical browser result is the clean-database rerun.
 
-- Fresh database `wdk_agent_verify_slice5_final` was created in the isolated Slice 5 container and all 13 Supabase migrations were applied in CI order.
-- Focused backend notification suites: 18/18 files and 77/77 tests passed.
-- Frontend suite: 20/20 files and 103/103 tests passed.
-- Browser E2E: the real outbox dispatcher and fake-RPC reconciliation both populated the HTTP feed; the Portless UI rendered both sources and persisted both mark-read operations in PostgreSQL.
-- Backend and frontend GitHub CI jobs passed on the exact PR head `e18d8c17f72b5c5961ebb6b1e3dc59961e01b803` after one transient rerun.
-- An additional full local backend run passed 146 files and 970 tests, skipped 4 files and 10 tests, and timed out in four unrelated contacts tests under cross-file database contention. The exact-head CI rerun subsequently passed the complete backend job, so this is recorded as harness flakiness rather than a Slice 5 regression.
+Coverage analysis was skipped because the repository declares no coverage command.
 
-Coverage analysis was skipped because the repository declares no coverage command or tool for this change.
-
-### Spec Compliance Matrix
+## Spec Compliance Matrix
 
 | Requirement | Scenario | Covering runtime evidence | Result |
 | --- | --- | --- | --- |
 | Verify and deduplicate signed provider webhooks | Invalid signature | `notifications-webhook.test.ts`, `notifications-webhook-deep.test.ts`, `webhook-signature.test.ts` | COMPLIANT |
 | Verify and deduplicate signed provider webhooks | Generic signed payload stays receipt-only | `notifications-webhook-receipt.test.ts`, `notifications-webhook-deep.test.ts` | COMPLIANT |
 | Verify and deduplicate signed provider webhooks | Duplicate provider delivery | `notifications-webhook.test.ts`, `notifications-webhook-receipt.test.ts` | COMPLIANT |
-| Reconcile missed or unsupported provider events | Webhook is missed | `notifications-reconciliation.test.ts`, focused browser E2E | COMPLIANT |
+| Reconcile missed or unsupported provider events | Webhook is missed | `notifications-reconciliation.test.ts`, clean browser E2E | COMPLIANT |
 | Reconcile missed or unsupported provider events | Webhook and poll overlap | `notifications-ingestion.test.ts`, `notifications-reconciliation.test.ts`, `notifications-schema.test.ts` | COMPLIANT |
-| Reconcile missed or unsupported provider events | Provider lacks event coverage | receipt-only webhook tests plus reconciliation integration and browser E2E | COMPLIANT |
+| Reconcile missed or unsupported provider events | Provider lacks event coverage | Receipt-only webhook tests plus reconciliation integration and browser E2E | COMPLIANT |
 | Publish transient refresh only after durable insert | LiveKit publish fails | `ingestion.test.ts`, `notifications-reconciliation.test.ts`, `livekit-invalidation-publisher.test.ts` | COMPLIANT |
 | Retry assistant lifecycle delivery durably | Dispatcher restarts after an attempt transition | `notifications-outbox.test.ts`, `notifications-outbox-dispatcher.test.ts`, `outbox-worker.test.ts` | COMPLIANT |
 | Retry assistant lifecycle delivery durably | System ingestion respects table-specific RLS | `notifications-schema.test.ts` | COMPLIANT |
-| Durable user-scoped notification feed | Assistant transfer lifecycle is visible | `assistant-state-mapping.test.ts`, `notifications-outbox.test.ts`, focused browser E2E | COMPLIANT |
-| Durable user-scoped notification feed | Inbound event is recovered | `solana-reconciliation-source.test.ts`, `notifications-reconciliation.test.ts`, focused browser E2E | COMPLIANT |
+| Durable user-scoped notification feed | Assistant transfer lifecycle is visible | `assistant-state-mapping.test.ts`, `notifications-outbox.test.ts`, clean browser E2E | COMPLIANT |
+| Durable user-scoped notification feed | Inbound event is recovered | `solana-reconciliation-source.test.ts`, `notifications-reconciliation.test.ts`, clean browser E2E | COMPLIANT |
 | Durable user-scoped notification feed | Feed access is isolated | `notifications-schema.test.ts`, `notifications-webhook-deep.test.ts` | COMPLIANT |
-| Safe display projection and read state | Notification refreshes without reload | `useNotificationsFeed.test.tsx`, focused browser E2E | COMPLIANT |
-| Safe display projection and read state | Read state is user-owned | `useNotificationsFeed.test.tsx`, `notifications-webhook-deep.test.ts`, focused browser E2E | COMPLIANT |
+| Safe display projection and read state | Notification refreshes without reload | `useNotificationsFeed.test.tsx`, clean browser E2E | COMPLIANT |
+| Safe display projection and read state | Read state is user-owned | `useNotificationsFeed.test.tsx`, `notifications-webhook-deep.test.ts`, clean browser E2E | COMPLIANT |
 
-### Compliance summary: 14/14 scenarios compliant
+**Compliance summary**: 14/14 scenarios compliant.
 
-### Correctness (Static Evidence)
+## Correctness (Static Evidence)
 
 | Requirement | Status | Notes |
 | --- | --- | --- |
-| Verify and deduplicate signed provider webhooks | Implemented | The route verifies exact raw bytes before JSON parsing and writes only a scoped receipt while embedded-wallet events remain unverified. |
-| Reconcile missed or unsupported provider events | Implemented | Persisted signature cursors, bounded pages, overlap-safe dedupe, leases, and no-skip error behavior are present. |
-| Publish transient refresh only after durable insert | Implemented | Both canonical ingestion and assistant outbox paths publish only after commit and swallow transient publish failure. |
-| Retry assistant lifecycle delivery durably | Implemented | Notification-worthy attempt transitions and outbox rows share a transaction; dispatch atomically inserts/completes and retries pending rows. |
-| Durable user-scoped notification feed | Implemented | Owner-scoped rows, authenticated HTTP reads, assistant and reconciled wallet projections, and LiveKit-independent persistence are present. |
-| Safe display projection and read state | Implemented | Responses expose the safe projection only; owner-scoped read updates and visible/focus/revision refresh paths are implemented. |
+| Signed webhook safety and dedupe | Implemented | Exact raw bytes are verified before parsing; unverified event classes remain receipt-only. |
+| Missed-event reconciliation | Implemented | Persisted forward cursors, bounded pages, leases, canonical dedupe, and process-before-advance behavior are present. |
+| Post-commit transient refresh | Implemented | Only an insert winner publishes after the owner transaction commits; publish failures do not undo persistence. |
+| Durable assistant lifecycle retry | Implemented | Attempt transition and outbox insert share the owner transaction; dispatch inserts/completes atomically. |
+| Durable owner-scoped feed | Implemented | Owner RLS, authenticated feed/read routes, durable projections, and no-LiveKit reads are present. |
+| Safe projection and read state | Implemented | Feed responses use the approved projection, and read updates are owner-scoped. |
 
-### Coherence (Design)
+## Coherence (Design)
 
 | Decision | Followed? | Notes |
 | --- | --- | --- |
-| PostgreSQL feed is durable truth | Yes | Feed rows and read state are database-backed; LiveKit is transient only. |
-| Shared normalization and dedupe | Yes | Canonical chain keys and the unique owner/dedupe constraint collapse retries and races. |
-| Raw-byte verification before parsing | Yes | The provider route installs a buffer parser in its Fastify scope and verifies before JSON parsing. |
-| Per-wallet cursor recovery with overlap | Yes | Reconciliation uses bounded pages, persisted cursors, leases, and oldest-first processing. |
-| Enable only verified provider event scope | Yes | Generic signed Privy payloads remain receipt-only; chain reconciliation supplies canonical wallet events. |
-| Transactional assistant lifecycle outbox | Yes | State transition and outbox insert share the owner transaction. |
-| Table-specific RLS | Yes | Owner feed, system ingestion tables, dual outbox access, and enrolled-wallet lookup are independently tested. |
-| `uncertain` visible, retryable `not_dispatched` omitted | Yes | Mapping and repository integration tests cover both branches. |
+| PostgreSQL feed is durable truth | Yes | Feed rows and read state are database-backed. |
+| Shared normalization and dedupe | Yes | Canonical keys plus `(user_id, dedupe_key)` uniqueness collapse retries. |
+| Raw-byte verification before parsing | Yes | The webhook-scoped buffer parser preserves signed bytes. |
+| Per-wallet cursor recovery with overlap | Yes | Forward catch-up state, bounded pages, and leases match the documented deviation. |
+| Enable only verified provider event scope | Yes | Generic Privy payloads remain receipt-only. |
+| Transactional assistant outbox | Yes | State and outbox persist together. |
+| Table-specific RLS | Yes | Owner, system-only, and dual-access policies are separately exercised. |
+| `uncertain` visible and retryable `not_dispatched` omitted | Yes | State mapping and repository tests cover both branches. |
 
-### TDD Compliance
+## TDD Compliance
 
 | Check | Result | Details |
 | --- | --- | --- |
-| TDD Evidence reported | Yes | `openspec/changes/slice5-notifications/apply-progress.md` (`eed53b0`) carries the canonical per-task TDD Cycle Evidence table (RED/GREEN/TRIANGULATE/REFACTOR, safety nets, layers). |
-| RED history recoverable | Yes | RED evidence is recorded per task in the apply-progress artifact and the RED contracts commit `0dd76f0` predates the principal backend implementation. |
-| All behavior has tests | Yes | All 14 spec scenarios have passing runtime coverage. |
-| GREEN confirmed | Yes | 77 focused backend tests, 103 frontend tests, browser E2E, and exact-head CI pass. |
-| Triangulation adequate | Yes | Signature, receipt, dedupe, race, RLS, cursor, outbox, polling, focus, revision, and read-state behaviors have variant cases. |
-| Safety net documented | Yes | Per-task safety nets documented in the apply-progress table; phase commits and the exact-head CI establish regression coverage. |
+| TDD evidence reported | PASS | `apply-progress.md` contains the required cycle table and phase commit map. |
+| All implementation tasks have tests | PASS | 13/13 implementation tasks map to test files; phase 4 contains verification/delivery tasks. |
+| RED confirmed | PASS | Every referenced test file exists; RED commit `0dd76f0` precedes implementation commits. |
+| GREEN confirmed | PASS | 77 focused backend tests, 103 frontend tests, and the clean browser E2E pass. |
+| Triangulation adequate | PASS | Boundary, replay, race, RLS, cursor, failure, polling, and stale-revision variants are covered. |
+| Safety net documented | PASS | Existing migration, schema, repository, and frontend suites are recorded for modified boundaries. |
 
-### TDD compliance: satisfied — the canonical evidence artifact exists and covers every task
+**TDD compliance**: 6/6 checks pass for implementation tasks.
 
-### Test Layer Distribution
+## Test Layer Distribution
 
 | Layer | Tests or flows | Files | Tools |
 | --- | ---: | ---: | --- |
@@ -120,38 +117,40 @@ Coverage analysis was skipped because the repository declares no coverage comman
 | E2E | 1 | 1 | Browser automation, Fastify, Portless, PostgreSQL |
 | **Total** | **87** | **21** | |
 
-### Changed File Coverage
+## Changed File Coverage
 
-Coverage analysis skipped because no coverage command/tool is configured.
+Coverage analysis skipped because no coverage command or tool is configured.
 
-### Assertion Quality
+## Assertion Quality
 
-All 20 changed Vitest files were scanned for tautologies, assertions without production calls, ghost loops, empty-only assertions, type-only assertions, smoke-only rendering, implementation-detail coupling, and excessive mock ratios. The empty-list and non-null assertions found have companion value/behavior checks. No critical or warning-level assertion defect was found.
+All 20 created or modified Vitest files were checked for tautologies, no-production-call assertions, ghost loops, empty-only checks, type-only checks, smoke-only rendering, implementation-detail assertions, and excessive mock ratios. Empty and non-null assertions have companion value or behavior checks. No critical or warning-level assertion defect was found.
 
-### Assertion quality: all assertions verify real behavior
+**Assertion quality**: all assertions verify behavior.
 
-### Quality Metrics
+## Quality Metrics
 
-### Linter: PASS, no errors or warnings
+**Linter**: PASS, no errors or warnings.
 
-### Type checker: PASS for backend and frontend
+**Type checker**: PASS for backend and frontend.
 
-### Issues Found
+## Issues Found
 
 ### CRITICAL
 
-1. RESOLVED (`eed53b0`): the canonical `apply-progress.md` artifact now exists with the per-task TDD Cycle Evidence table recovered from the phase history. No product defect was involved; the blocker was purely the missing evidence artifact.
+1. The configured full backend verification does not pass on the current tree. With CI-shaped PostgreSQL and one worker, `api-contacts.test.ts` times out in all three cases and `contacts-cross-user.test.ts` times out in its sole case. The same four tests also time out when run alone. No notification test fails, but `sdd-verify` treats any required test-command failure as blocking.
 
 ### WARNING
 
-1. One full local backend run and the first GitHub CI attempt exposed unrelated database-contention timeouts in contacts/api-wallet integration files. The exact-head GitHub CI rerun passed both jobs, and all Slice 5 suites passed on a fresh isolated database; no Slice 5 regression was found.
+1. `state.yaml` remains at `status: blocked`, `verify: failed`, with `verification_blocker: missing_strict_tdd_cycle_evidence`, although `apply-progress.md` now contains that evidence and the prior report declared PASS. The canonical SDD state was never advanced after `eed53b0`/`232d4f2`.
+2. `apply-progress.md` ends with a stale unchecked 4.3 delivery item, while the authoritative `tasks.md` has all 16 tasks checked and PR #5 is open at `b83695c`.
+3. Local commit `b7f7338` only adds a Herdr receipt, so it does not alter the product or SDD task result; the receipt itself still says `status: in_progress` and lists pending verification from the original RED-only executor session.
 
 ### SUGGESTION
 
-1. Future Strict TDD apply phases should persist the required per-task RED, GREEN, triangulation, safety-net, and refactor evidence at apply time so final verification does not depend on reconstructing intent from Git history.
+1. Diagnose the contacts test timeout separately, then rerun the full backend command on the exact candidate and update `state.yaml` from the resulting admitted verification evidence.
 
-### Verdict
+## Verdict
 
-**PASS**
+**FAIL**
 
-All implementation requirements and scenarios pass, and the previously sole blocker (missing Strict TDD evidence artifact) is resolved by `apply-progress.md` at `eed53b0`. No product-code defect was found.
+The Slice 5 implementation satisfies all six requirements and fourteen scenarios in focused, integration, frontend, and browser execution, but the required full backend test command is not green and the canonical SDD state remains internally inconsistent.
