@@ -151,4 +151,56 @@ suite("/v1/contacts CRUD (demo mode, PMU-008..012)", () => {
       await app.close();
     }
   });
+
+  it("creates and versions explicit Solana devnet contacts without changing legacy EVM defaults", {
+    timeout: 60_000,
+  }, async () => {
+    const app = buildServer();
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: "/v1/contacts",
+        payload: {
+          name: "Solana contact slice4",
+          description: "devnet",
+          address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+          network: "solana-devnet",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const contact = created.json().data;
+      expect(contact).toMatchObject({ network: "solana-devnet", version: 1 });
+
+      const changed = await app.inject({
+        method: "PATCH",
+        url: `/v1/contacts/${contact.id}`,
+        payload: {
+          address: "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7ua4e6FjZg3Dq",
+          expectedVersion: 1,
+        },
+      });
+      expect(changed.statusCode).toBe(200);
+      expect(changed.json().data).toMatchObject({ network: "solana-devnet", version: 2 });
+
+      const version = await database.query<{ network: string | null }>(
+        "SELECT network FROM recipient_versions WHERE recipient_id = $1 AND version = 1",
+        [contact.id],
+      );
+      expect(version.rows[0]?.network).toBe("solana-devnet");
+
+      const wrongNetwork = await app.inject({
+        method: "POST",
+        url: "/v1/contacts",
+        payload: {
+          name: "Wrong network slice4",
+          description: "invalid",
+          address: "0x9999999999999999999999999999999999999999",
+          network: "solana-devnet",
+        },
+      });
+      expect(wrongNetwork.statusCode).toBe(422);
+    } finally {
+      await app.close();
+    }
+  });
 });

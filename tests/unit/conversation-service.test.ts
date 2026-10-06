@@ -9,6 +9,7 @@ import { FinancialTaskRegistry } from '../../src/conversations/financial-task-re
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const recipient = '0x1234567890123456789012345678901234567890';
+const solanaRecipient = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
 const recipientId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 function repositoryFixture(initialTransfer?: PendingTransfer): ConversationRepository {
@@ -295,6 +296,9 @@ describe('WalletConversationService', () => {
       const previousSource = process.env.WDK_TOOLS_SOURCE;
       const previousMaximum = process.env.WDK_MAX_TRANSFER_AMOUNT;
       const previousAllowed = process.env.WDK_ALLOWED_RECIPIENTS;
+      const previousNetwork = process.env.WDK_NETWORK;
+      const previousToken = process.env.WDK_TOKEN;
+      const previousWallet = process.env.WDK_WALLET_NAME;
 
       beforeEach(() => {
         process.env.WDK_TOOLS_SOURCE = 'fixture';
@@ -307,6 +311,12 @@ describe('WalletConversationService', () => {
         else process.env.WDK_MAX_TRANSFER_AMOUNT = previousMaximum;
         if (previousAllowed === undefined) delete process.env.WDK_ALLOWED_RECIPIENTS;
         else process.env.WDK_ALLOWED_RECIPIENTS = previousAllowed;
+        if (previousNetwork === undefined) delete process.env.WDK_NETWORK;
+        else process.env.WDK_NETWORK = previousNetwork;
+        if (previousToken === undefined) delete process.env.WDK_TOKEN;
+        else process.env.WDK_TOKEN = previousToken;
+        if (previousWallet === undefined) delete process.env.WDK_WALLET_NAME;
+        else process.env.WDK_WALLET_NAME = previousWallet;
       });
 
       const previewInput = {
@@ -404,6 +414,89 @@ describe('WalletConversationService', () => {
           status: 'error',
           code: 'recipient_revalidation_required',
         });
+      });
+
+      it('routes a versioned Solana devnet contact through an exact native SOL preview without broadcasting', async () => {
+        process.env.WDK_TOOLS_SOURCE = 'fixture';
+        process.env.WDK_NETWORK = 'sepolia';
+        process.env.WDK_TOKEN = 'USDT';
+        process.env.WDK_WALLET_NAME = 'privy-user';
+        const repository = repositoryFixture();
+        const wallet = walletFixture();
+        const solanaWallet = walletFixture();
+        const preview = vi.spyOn(solanaWallet, 'previewTransfer');
+        const broadcast = vi.spyOn(solanaWallet, 'broadcastTransfer');
+        const walletForUser = vi.fn(async (_user: string, chain?: string | (() => string)) =>
+          chain === 'solana' || (typeof chain === 'function' && chain() === 'solana') ? solanaWallet : wallet);
+        const setPending = vi.spyOn(repository, 'setPendingTransfer');
+        const memory = {
+          userId,
+          service: {
+            getRecipientForVersion: vi.fn().mockResolvedValue({
+              id: recipientId,
+              userId,
+              version: 2,
+              address: solanaRecipient,
+              name: 'Lucas Gutiérrez',
+              normalizedName: 'lucas gutiérrez',
+              description: 'Amigo del equipo',
+              status: 'active',
+              embeddingModelRevision: 'rev',
+              network: 'solana-devnet',
+            }),
+          },
+        } as never;
+        const service = createWalletConversationService({ conversations: repository, wallet, walletForUser, memory });
+
+        await expect(service.previewTransfer({ ...previewInput, amount: '0.01' })).resolves.toMatchObject({
+          status: 'confirmation_required',
+          preview: { network: 'solana-devnet', token: 'SOL', recipient: solanaRecipient, amount: '0.01' },
+        });
+        expect(preview).toHaveBeenCalledWith(expect.objectContaining({
+          network: 'solana-devnet', token: 'SOL', to: solanaRecipient, amount: '0.01', wallet: 'privy-user',
+        }));
+        expect(walletForUser).toHaveBeenCalledWith(userId, 'solana');
+        expect(setPending).toHaveBeenCalledWith(userId, previewInput.conversationId, expect.objectContaining({
+          network: 'solana-devnet', token: 'SOL', amount: '0.01',
+        }));
+        expect(broadcast).not.toHaveBeenCalled();
+      });
+
+      it('rejects a Solana amount above the configured live maximum before preview or pending persistence', async () => {
+        process.env.WDK_TOOLS_SOURCE = 'solana-devnet';
+        process.env.WDK_NETWORK = 'sepolia';
+        process.env.WDK_TOKEN = 'USDT';
+        process.env.WDK_WALLET_NAME = 'privy-user';
+        process.env.WDK_MAX_TRANSFER_AMOUNT = '0.01';
+        process.env.WDK_ALLOWED_RECIPIENTS = solanaRecipient;
+        const repository = repositoryFixture();
+        const wallet = walletFixture();
+        const preview = vi.spyOn(wallet, 'previewTransfer');
+        const setPending = vi.spyOn(repository, 'setPendingTransfer');
+        const memory = {
+          userId,
+          service: {
+            getRecipientForVersion: vi.fn().mockResolvedValue({
+              id: recipientId,
+              userId,
+              version: 2,
+              address: solanaRecipient,
+              name: 'Lucas Gutiérrez',
+              normalizedName: 'lucas gutiérrez',
+              description: 'Amigo del equipo',
+              status: 'active',
+              embeddingModelRevision: 'rev',
+              network: 'solana-devnet',
+            }),
+          },
+        } as never;
+        const service = createWalletConversationService({ conversations: repository, wallet, memory });
+
+        await expect(service.previewTransfer({ ...previewInput, amount: '0.010000001' })).resolves.toMatchObject({
+          status: 'error', code: 'policy_rejected',
+        });
+        expect(preview).not.toHaveBeenCalled();
+        expect(setPending).not.toHaveBeenCalled();
       });
 
       it('publishes state revisions across preview, claim, and finality (V8.4)', async () => {

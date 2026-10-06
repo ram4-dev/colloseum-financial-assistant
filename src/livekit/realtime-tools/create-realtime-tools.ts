@@ -9,6 +9,7 @@ import type { WalletProvider } from "../../wallet/provider.js";
 import type { ConversationRepository } from "../../conversations/repository.js";
 import type { WalletConversationService } from "../../conversations/service.js";
 import type { ConversationTurnResult } from "../../contracts/http.js";
+import type { VoiceDecisionGate } from "../voice-decision-gate.js";
 
 /**
  * Dependencies used to build the realtime voice tools for a single conversation.
@@ -31,6 +32,8 @@ export type RealtimeToolsDependencies = {
   recipientMemory?: RecipientMemoryService;
   service?: WalletConversationService;
   conversations?: ConversationRepository;
+  voiceDecisionGate?: VoiceDecisionGate;
+  speakPreview?: (text: string) => Promise<{ interrupted: boolean }>;
   /** Retained for seam stability; the service publishes revisions via financialTasks. */
   publishRevision?: (revision: number) => void;
 };
@@ -45,6 +48,7 @@ export type RealtimeContactCandidate = {
   status: "active" | "inactive";
   evidence: string;
   score: number;
+  network?: "solana-devnet";
 };
 
 export type RealtimeSearchContactsResult = {
@@ -79,6 +83,9 @@ export type RealtimeVoiceToolResult = {
   code?: string;
   amount?: string;
   token?: string;
+  recipientName?: string;
+  estimatedFee?: string;
+  network?: string;
   transactionHash?: string;
 };
 
@@ -118,6 +125,7 @@ function stripCandidate(candidate: RecipientCandidate): RealtimeContactCandidate
     status: candidate.status,
     evidence: candidate.evidence,
     score: candidate.score,
+    ...(candidate.network ? { network: candidate.network } : {}),
   };
 }
 
@@ -264,16 +272,17 @@ export function createRealtimeTools(dependencies: RealtimeToolsDependencies) {
   const sendTokenTool = tool({
     name: "send_token",
     description:
-      "Prepares a transfer for explicit user confirmation. Takes the amount and the already-resolved recipient (recipientId + recipientVersion). Never takes an address, network, token, or dryRun. After the user agrees, call confirm_transfer.",
+      "Prepares a transfer for explicit user confirmation. Takes the amount and the already-resolved recipient (recipientId + recipientVersion). Never takes an address, network, token, or dryRun. The server reads back amount, saved contact name, network, and estimated fee, then asks for a clear decision. Call confirm_transfer only after a fresh exact user confirmation after that read-back.",
     parameters: sendTokenSchema,
     execute: async (input: SendTokenInput): Promise<RealtimeVoiceToolResult> => {
-      if (!dependencies.service) {
+      if (!dependencies.service || !dependencies.conversations) {
         return {
           status: "error",
           code: "wallet_unavailable",
           message: "The wallet service is unavailable.",
         };
       }
+      const conversations = dependencies.conversations;
       const result = await dependencies.service.previewTransfer({
         conversationId: dependencies.conversationId,
         userId: dependencies.userId,
@@ -281,7 +290,70 @@ export function createRealtimeTools(dependencies: RealtimeToolsDependencies) {
         recipientId: input.recipientId,
         recipientVersion: input.recipientVersion,
       });
-      return toVoiceToolResult(result);
+      const output = toVoiceToolResult(result);
+      if (result.status !== "confirmation_required") return output;
+      const current = await conversations.get(
+        dependencies.userId,
+        dependencies.conversationId,
+      );
+      const pending = current?.pendingTransfer;
+      const previewId = pending?.previewId;
+      if (
+        !previewId ||
+        !pending ||
+        pending.amount !== result.preview.amount ||
+        pending.token !== result.preview.token ||
+        pending.network !== result.preview.network ||
+        !dependencies.voiceDecisionGate ||
+        !dependencies.speakPreview
+      ) {
+        if (previewId) dependencies.voiceDecisionGate?.clear(previewId);
+        return {
+          status: "error",
+          code: "confirmation_required",
+          message: "The saved preview could not be read back safely. Please try again.",
+        };
+      }
+      const recipient = await dependencies.recipientMemory?.getRecipientForVersion(
+        dependencies.userId,
+        input.recipientId,
+        input.recipientVersion,
+      );
+      if (!recipient || recipient.id !== input.recipientId || recipient.version !== input.recipientVersion) {
+        dependencies.voiceDecisionGate.clear(previewId);
+        return {
+          status: "error",
+          code: "recipient_revalidation_required",
+          message: "The saved contact changed. Please select the contact again.",
+        };
+      }
+      const state = await conversations.get(
+        dependencies.userId,
+        dependencies.conversationId,
+      );
+      const language = state?.language ?? "en";
+      const network = result.preview.network;
+      const networkLabel = network === "solana-devnet" ? "Solana devnet" : network;
+      const fee = result.preview.estimatedFee;
+      const readback = language === "es"
+        ? `Transferencia de ${result.preview.amount} ${result.preview.token} por ${networkLabel} para ${recipient.name}. Comisión estimada: ${fee}. ¿Confirmás o cancelás?`
+        : `Transfer ${result.preview.amount} ${result.preview.token} on ${networkLabel} to ${recipient.name}. Estimated fee: ${fee}. Do you confirm or cancel?`;
+      dependencies.voiceDecisionGate.prepare(previewId);
+      try {
+        const playout = await dependencies.speakPreview(readback);
+        dependencies.voiceDecisionGate.completeNarration(previewId, { interrupted: playout.interrupted });
+      } catch {
+        dependencies.voiceDecisionGate.completeNarration(previewId, { interrupted: true });
+      }
+      return {
+        ...output,
+        message: language === "es"
+          ? "La vista previa ya se leyó en voz alta. Esperá la respuesta explícita sin repetirla."
+          : "The server has read the preview aloud. Wait for the user's explicit decision without repeating it.",
+        recipientName: recipient.name,
+        estimatedFee: fee,
+        network,
+      };
     },
   });
 
@@ -309,6 +381,15 @@ export function createRealtimeTools(dependencies: RealtimeToolsDependencies) {
         message: "There is no pending transfer to confirm or cancel.",
       };
     }
+    if (!dependencies.voiceDecisionGate?.consume(previewId, decision)) {
+      return {
+        status: "error",
+        code: "confirmation_required",
+        message: decision === "confirm"
+          ? "Please explicitly confirm the current preview after hearing it."
+          : "Please explicitly cancel the current preview after hearing it.",
+      };
+    }
     let result: ConversationTurnResult | undefined;
     const iterable = dependencies.service.resolveDecision({
       conversationId: dependencies.conversationId,
@@ -333,7 +414,7 @@ export function createRealtimeTools(dependencies: RealtimeToolsDependencies) {
   const confirmTransferTool = tool({
     name: "confirm_transfer",
     description:
-      "Confirms the transfer currently awaiting the user's decision. Takes no parameters. Call ONLY after the user explicitly agrees.",
+      "Confirms the current transfer only after a fresh final exact spoken confirmation following the server read-back. A model tool call is not authorization. Takes no parameters.",
     parameters: confirmationSchema,
     execute: async (): Promise<RealtimeVoiceToolResult> => decideTransfer("confirm"),
   });
@@ -341,7 +422,7 @@ export function createRealtimeTools(dependencies: RealtimeToolsDependencies) {
   const cancelTransferTool = tool({
     name: "cancel_transfer",
     description:
-      "Cancels the transfer currently awaiting the user's decision. Takes no parameters. Call when the user wants to cancel.",
+      "Cancels the current transfer only after a fresh final exact spoken cancellation following the server read-back. Takes no parameters.",
     parameters: cancelSchema,
     execute: async (): Promise<RealtimeVoiceToolResult> => decideTransfer("cancel"),
   });

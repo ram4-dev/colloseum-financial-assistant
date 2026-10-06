@@ -271,6 +271,7 @@ export const contactSchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   address: z.string().min(1),
+  network: z.literal("solana-devnet").optional(),
   version: z.number().int().positive(),
   status: z.enum(["active", "inactive"]),
   createdAt: z.string(),
@@ -282,6 +283,7 @@ export const createContactInputSchema = z.object({
   name: z.string().trim().min(1),
   description: z.string().trim().default(""),
   address: z.string().trim().min(1),
+  network: z.literal("solana-devnet").optional(),
 });
 export type CreateContactInput = z.infer<typeof createContactInputSchema>;
 
@@ -289,6 +291,7 @@ export const updateContactInputSchema = z.object({
   name: z.string().trim().min(1).optional(),
   description: z.string().trim().optional(),
   address: z.string().trim().min(1).optional(),
+  network: z.literal("solana-devnet").nullable().optional(),
   expectedVersion: z.number().int().positive(),
 });
 export type UpdateContactInput = z.infer<typeof updateContactInputSchema>;

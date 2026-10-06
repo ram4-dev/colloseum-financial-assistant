@@ -1,5 +1,6 @@
 import type { ConversationSnapshot } from "./types.js";
 import type { TransactionResult } from "../contracts/http.js";
+import { explorerUrlFor } from "../wallet/provider.js";
 
 export type ConversationActivity =
   "idle" | "working" | "awaiting_confirmation" | "verifying" | "uncertain" | "request_waiting";
@@ -73,7 +74,10 @@ export function projectConversationState(
     ? {
         network: snapshot.pendingTransfer?.network ?? "sepolia",
         transactionHash: snapshot.lastTransactionHash,
-        explorerUrl: `https://sepolia.etherscan.io/tx/${snapshot.lastTransactionHash}`,
+        explorerUrl: explorerUrlFor(
+          snapshot.pendingTransfer?.network ?? "sepolia",
+          snapshot.lastTransactionHash,
+        ),
       }
     : undefined;
   return {

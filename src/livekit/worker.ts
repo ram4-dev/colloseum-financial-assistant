@@ -21,6 +21,9 @@ import { getWalletAgentConfig } from "../agent/instructions.js";
 import { getConfiguredRecipientMemoryService } from "../memory/runtime.js";
 import { createAgentSession } from "./create-agent-session.js";
 import { createRealtimeTools } from "./realtime-tools/index.js";
+import { createVoiceDecisionGate } from "./voice-decision-gate.js";
+import { isCancellation, isConfirmation } from "./resolution-phrases.js";
+import { attachVoiceDecisionTranscripts } from "./voice-decision-transcripts.js";
 import {
   createBindingRpcHandler,
   createRoomConversationGate,
@@ -86,6 +89,7 @@ async function runJob(
     throw new Error("LiveKit worker requires LIVE_VOICE_BINDING_PUBLIC_KEY.");
   await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
   const participant = await ctx.waitForParticipant();
+  const voiceDecisionGate = createVoiceDecisionGate({ isConfirmation, isCancellation });
   const roomConversation = new RoomConversation({
     publicKey: config.publicKey,
     conversations: dependencies.conversations,
@@ -117,6 +121,7 @@ async function runJob(
       const voiceService = createWalletConversationService({
         conversations: dependencies.conversations,
         wallet,
+        ...(dependencies.walletForUser ? { walletForUser: dependencies.walletForUser } : {}),
         ...(memoryService
           ? { memory: { userId: binding.userId, service: memoryService } }
           : {}),
@@ -130,6 +135,13 @@ async function runJob(
         service: voiceService,
         conversations: dependencies.conversations,
         ...(memoryService ? { recipientMemory: memoryService } : {}),
+        voiceDecisionGate,
+        speakPreview: async (text) => {
+          if (!session) return { interrupted: true };
+          const speech = session.say(text, { allowInterruptions: true });
+          await speech.waitForPlayout();
+          return { interrupted: speech.interrupted };
+        },
       });
       const created = createAgentSession({ tools });
       unsubscribeRevisions = dependencies.financialTasks.subscribe((event) => {
@@ -157,6 +169,21 @@ async function runJob(
         );
       });
       session = created.session;
+      const detachVoiceDecisionTranscripts = attachVoiceDecisionTranscripts(
+        created.session,
+        voiceDecisionGate,
+        (speakerId) => {
+        const participantIsSoleSpeaker =
+          ctx.room.remoteParticipants.size === 1 &&
+          ctx.room.remoteParticipants.has(participant.identity);
+        return speakerId
+          ? speakerId === participant.identity && participantIsSoleSpeaker
+          : participantIsSoleSpeaker;
+        },
+      );
+      created.session.once(AgentSessionEventTypes.Close, () => {
+        detachVoiceDecisionTranscripts();
+      });
       sessionClosed = new Promise<void>((resolve) =>
         created.session.once(AgentSessionEventTypes.Close, () => resolve()),
       );

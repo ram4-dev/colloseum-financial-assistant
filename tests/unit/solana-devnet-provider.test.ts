@@ -176,6 +176,18 @@ describe("SolanaDevnetProvider", () => {
     ).rejects.toThrow();
   });
 
+  it("fails closed without the persisted preview ID before RPC or signing", async () => {
+    const rpc = rpcDouble();
+    const signer = signerDouble();
+    const p = provider(rpc, signer);
+
+    await expect(p.broadcastTransfer({ ...REQUEST, previewId: undefined })).resolves.toMatchObject({
+      kind: "not_dispatched",
+    });
+    expect(rpc.getRecentBlockhash).not.toHaveBeenCalled();
+    expect(signer.signAndSend).not.toHaveBeenCalled();
+  });
+
   it("maps broadcast outcomes honestly", async () => {
     const notDispatched = provider(
       rpcDouble(),

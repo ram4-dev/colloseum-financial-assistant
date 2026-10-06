@@ -1,5 +1,5 @@
 const CONFIRMATIONS = new Set([
-  'confirm', 'i confirm', 'yes confirm', 'yes, confirm', 'yes i confirm', 'yes, i confirm',
+  'confirm', 'i confirm', 'yes', 'sí', 'si', 'i confirm', 'yes confirm', 'yes, confirm', 'yes i confirm', 'yes, i confirm',
   'confirm transfer', 'confirm the transfer', 'confirmar', 'confirmo', 'sí confirmo', 'sí, confirmo',
   'si confirmo', 'si, confirmo', 'sí confirma', 'sí, confirma', 'si confirma', 'si, confirma',
   'te lo confirmo', 'sí te lo confirmo', 'sí, te lo confirmo', 'si te lo confirmo', 'si, te lo confirmo',

@@ -1,6 +1,6 @@
 import { DatabaseClient } from '../db/client.js';
 import { normalizeMemoryText, redactAddressLikeText, vectorLiteral } from './embedding.js';
-import { isValidEvmAddress } from './address.js';
+import { isValidRecipientAddress } from './address.js';
 import type {
   Embedding,
   RecipientCandidate,
@@ -17,6 +17,7 @@ type RecipientRow = {
   normalized_name: string;
   description: string;
   address: string;
+  network: 'solana-devnet' | null;
   version: string;
   status: 'active' | 'inactive';
   embedding_model_revision: string;
@@ -33,6 +34,7 @@ function mapRecipient(row: RecipientRow): RecipientRecord {
     normalizedName: row.normalized_name,
     description: row.description,
     address: row.address,
+    ...(row.network === 'solana-devnet' ? { network: 'solana-devnet' as const } : {}),
     version: Number(row.version),
     status: row.status,
     embeddingModelRevision: row.embedding_model_revision,
@@ -45,6 +47,7 @@ function mapCandidate(row: CandidateRow): RecipientCandidate {
     name: row.name,
     normalizedName: row.normalized_name,
     description: row.description,
+    ...(row.network === 'solana-devnet' ? { network: 'solana-devnet' as const } : {}),
     version: Number(row.version),
     status: row.status,
     embeddingModelRevision: row.embedding_model_revision,
@@ -60,7 +63,7 @@ export class RecipientMemoryRepository {
     const normalizedQuery = normalizeMemoryText(query);
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<CandidateRow>(`
-        SELECT id, name, normalized_name, description, version, status, embedding_model_revision,
+        SELECT id, name, normalized_name, description, network, version, status, embedding_model_revision,
                CASE WHEN normalized_name = $2 THEN name ELSE description END AS evidence,
                ((1 - (embedding <=> $3::vector)) + CASE WHEN normalized_name = $2 THEN 0.15 ELSE 0 END) AS score
         FROM recipients
@@ -95,7 +98,7 @@ export class RecipientMemoryRepository {
   public async getRecipientForVersion(userId: string, recipientId: string, expectedVersion: number): Promise<RecipientRecord | undefined> {
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<RecipientRow>(`
-        SELECT id, user_id, name, normalized_name, description, address, version, status, embedding_model_revision
+        SELECT id, user_id, name, normalized_name, description, address, network, version, status, embedding_model_revision
         FROM recipients
         WHERE user_id = $1 AND id = $2 AND version = $3 AND status = 'active'`, [userId, recipientId, expectedVersion]);
       return result.rows[0] ? mapRecipient(result.rows[0]) : undefined;
@@ -103,15 +106,15 @@ export class RecipientMemoryRepository {
   }
 
   public async insertRecipient(userId: string, input: RecipientInput, embedding: Embedding, embeddingModelRevision: string): Promise<RecipientRecord> {
-    if (!isValidEvmAddress(input.address)) {
-      throw new Error('Recipient address must be a valid EVM address.');
+    if (!isValidRecipientAddress(input.address, input.network)) {
+      throw new Error('Recipient address must match the selected network.');
     }
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<RecipientRow>(`
-        INSERT INTO recipients (user_id, name, normalized_name, description, address, embedding, embedding_model_revision, provenance, address_confirmed_at)
-        VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8::jsonb, now())
-        RETURNING id, user_id, name, normalized_name, description, address, version, status, embedding_model_revision`, [
-        userId, redactAddressLikeText(input.name).trim(), normalizeMemoryText(input.name), redactAddressLikeText(input.description).trim(), input.address.trim(),
+        INSERT INTO recipients (user_id, name, normalized_name, description, address, network, embedding, embedding_model_revision, provenance, address_confirmed_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9::jsonb, now())
+        RETURNING id, user_id, name, normalized_name, description, address, network, version, status, embedding_model_revision`, [
+        userId, redactAddressLikeText(input.name).trim(), normalizeMemoryText(input.name), redactAddressLikeText(input.description).trim(), input.address.trim(), input.network ?? null,
         vectorLiteral(embedding), embeddingModelRevision, JSON.stringify(input.provenance ?? {}),
       ]);
       return mapRecipient(result.rows[0]!);

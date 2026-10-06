@@ -38,7 +38,7 @@ import {
   type WalletForUser,
 } from "../wallet/privy-user-provider.js";
 import { validateWalletTransferPolicy } from "../wallet/agent-tools.js";
-import { isValidEvmAddress } from "../memory/address.js";
+import { isValidRecipientAddress } from "../memory/address.js";
 import type { FinancialTaskRegistry } from "./financial-task-registry.js";
 import {
   assessFinancialIntent,
@@ -842,16 +842,18 @@ export function createWalletConversationService(
       return errorResult(errorFromCode("recipient_revalidation_required"));
 
     const config = getWalletAgentConfig();
+    const network = recipient.network ?? config.network;
+    const token = recipient.network === "solana-devnet" ? "SOL" : config.token;
     const transferRequest: TransferRequest = {
-      network: config.network,
-      token: config.token,
+      network,
+      token,
       to: recipient.address,
       amount: input.amount,
       wallet: config.wallet,
     };
     const policyError = validateWalletTransferPolicy(
       { ...transferRequest, dryRun: false },
-      config,
+      policyConfigForTransfer(transferRequest, config),
     );
     if (policyError) return errorResult(errorFromCode("policy_rejected"));
 
@@ -859,7 +861,7 @@ export function createWalletConversationService(
     try {
       preview = await walletForUser(
         input.userId,
-        config.network,
+        transferRequest.network,
       ).previewTransfer(transferRequest);
     } catch {
       return errorResult(errorFromCode("wallet_unavailable"));
@@ -889,7 +891,7 @@ export function createWalletConversationService(
     userId: string,
     recipientId: string,
     recipientVersion: number,
-  ): Promise<{ ok: true; address: string; name: string } | { ok: false }> {
+  ): Promise<{ ok: true; address: string; name: string; network?: "solana-devnet" } | { ok: false }> {
     if (!recipientId || recipientVersion === undefined || recipientVersion <= 0)
       return { ok: false };
     if (!dependencies.memory) return { ok: false };
@@ -902,11 +904,16 @@ export function createWalletConversationService(
       !current ||
       current.id !== recipientId ||
       current.version !== recipientVersion ||
-      !isValidEvmAddress(current.address)
+      !isValidRecipientAddress(current.address, current.network)
     ) {
       return { ok: false };
     }
-    return { ok: true, address: current.address, name: current.name };
+    return {
+      ok: true,
+      address: current.address,
+      name: current.name,
+      ...(current.network === "solana-devnet" ? { network: "solana-devnet" as const } : {}),
+    };
   }
 
   async function publish(current: ConversationEvent): Promise<void> {
@@ -958,7 +965,7 @@ export function createWalletConversationService(
     const transfer = toTransferRequest(claimed);
     const policyError = validateWalletTransferPolicy(
       { ...transfer, dryRun: false },
-      getWalletAgentConfig(),
+      policyConfigForTransfer(transfer, getWalletAgentConfig()),
     );
     const recipientValid = await isClaimedRecipientValid(
       claimed,
@@ -1705,6 +1712,16 @@ function toTransferRequest(transfer: PendingTransfer): TransferRequest {
   };
 }
 
+function policyConfigForTransfer(
+  transfer: Pick<TransferRequest, "network" | "token">,
+  config: ReturnType<typeof getWalletAgentConfig>,
+) {
+  if (transfer.network === "solana-devnet" && transfer.token === "SOL") {
+    return { ...config, network: "solana-devnet", token: "SOL" };
+  }
+  return config;
+}
+
 async function isClaimedRecipientValid(
   transfer: PendingTransfer,
   memory?: RecipientMemoryRuntime,
@@ -1717,11 +1734,13 @@ async function isClaimedRecipientValid(
     transfer.recipientId,
     transfer.recipientVersion,
   );
+  const expectedNetwork = transfer.network === "solana-devnet" ? "solana-devnet" : undefined;
   return Boolean(
     current &&
       current.id === transfer.recipientId &&
       current.version === transfer.recipientVersion &&
-      isValidEvmAddress(current.address) &&
+      current.network === expectedNetwork &&
+      isValidRecipientAddress(current.address, current.network) &&
       current.address === transfer.to,
   );
 }

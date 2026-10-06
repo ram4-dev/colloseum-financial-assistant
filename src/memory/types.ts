@@ -7,6 +7,7 @@ export type RecipientInput = {
   name: string;
   description: string;
   address: string;
+  network?: 'solana-devnet' | null;
   provenance?: Record<string, unknown>;
 };
 
@@ -23,6 +24,7 @@ export type RecipientRecord = {
   normalizedName: string;
   description: string;
   address: string;
+  network?: 'solana-devnet' | null;
   version: number;
   status: 'active' | 'inactive';
   embeddingModelRevision: string;

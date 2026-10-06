@@ -5,7 +5,7 @@ import type { ConversationLanguage } from '../conversations/language.js';
 import { invalidateSelectedRecipient, type ConversationSession } from '../conversations/session-state.js';
 import type { RecipientMemoryRuntime } from '../memory/runtime.js';
 import { createRecipientMemoryTools } from '../memory/tools.js';
-import { isValidEvmAddress } from '../memory/address.js';
+import { isValidEvmAddress, isValidRecipientAddress } from '../memory/address.js';
 import type { WalletProvider, TransferRequest } from '../wallet/provider.js';
 import { explorerUrlFor } from '../wallet/provider.js';
 import { decodeMcpText } from '../wdk/mcp-client.js';
@@ -146,11 +146,13 @@ export function normalizeBroadcastResult(output: unknown, network: string) {
 /**
  * Single source of truth for whether live-transfer policy applies. Both policy
  * gates (definition and wallet-agent) must branch on this predicate so the
- * circle-arc live mode can never bypass the policy configuration the WDK live
- * mode enforces.
+ * circle-arc and Solana devnet live modes can never bypass the policy
+ * configuration enforced for live wallet transfers.
  */
 export function isLiveTransferSource(environment: NodeJS.ProcessEnv = process.env): boolean {
-  return environment.WDK_TOOLS_SOURCE === 'live' || environment.WDK_TOOLS_SOURCE === 'circle-arc';
+  return environment.WDK_TOOLS_SOURCE === 'live' ||
+    environment.WDK_TOOLS_SOURCE === 'circle-arc' ||
+    environment.WDK_TOOLS_SOURCE === 'solana-devnet';
 }
 
 export function validateWalletTransferPolicy(
@@ -164,9 +166,14 @@ export function validateWalletTransferPolicy(
   if (!positiveDecimal(maximum)) return { error: 'policy_rejected', message: 'Live transfer policy is invalid: WDK_MAX_TRANSFER_AMOUNT must be a positive plain decimal.' };
   if (input.wallet !== config.wallet || input.network !== config.network || input.token !== config.token) return { error: 'policy_rejected', message: 'Refusing live transfer: wallet, network, and token must exactly match the configured wallet.' };
   if (!positiveDecimal(input.amount)) return { error: 'policy_rejected', message: 'Refusing live transfer: amount must be a positive plain decimal.' };
+  const amountFraction = input.amount.split('.')[1];
+  const maximumFraction = maximum.split('.')[1];
+  if (input.network === 'solana-devnet' && ((amountFraction?.length ?? 0) > 9 || (maximumFraction?.length ?? 0) > 9)) {
+    return { error: 'policy_rejected', message: 'Refusing live transfer: SOL amounts must have at most 9 decimal places.' };
+  }
   if (compareDecimals(input.amount, maximum) > 0) return { error: 'policy_rejected', message: 'Refusing live transfer: amount exceeds WDK_MAX_TRANSFER_AMOUNT.' };
-  if (!isValidEvmAddress(input.to) || isBurnAddress(input.to)) return { error: 'policy_rejected', message: 'Refusing live transfer: recipient must be a valid non-burn EVM address.' };
-  if (!allowed.some((value) => value.toLocaleLowerCase('en-US') === input.to.toLocaleLowerCase('en-US'))) return { error: 'policy_rejected', message: 'Refusing live transfer: recipient is not in WDK_ALLOWED_RECIPIENTS.' };
+  if (!isValidRecipientAddress(input.to, input.network) || (input.network !== 'solana-devnet' && isBurnAddress(input.to))) return { error: 'policy_rejected', message: 'Refusing live transfer: recipient must match the configured network.' };
+  if (!allowed.some((value) => input.network === 'solana-devnet' ? value === input.to : value.toLocaleLowerCase('en-US') === input.to.toLocaleLowerCase('en-US'))) return { error: 'policy_rejected', message: 'Refusing live transfer: recipient is not in WDK_ALLOWED_RECIPIENTS.' };
   return undefined;
 }
 
@@ -325,7 +332,7 @@ async function validatePreviewRecipient(
     !current ||
     current.id !== selected.recipientId ||
     current.version !== selected.version ||
-    !isValidEvmAddress(current.address) ||
+    !isValidRecipientAddress(current.address, current.network) ||
     current.address !== input.to
   ) {
     invalidateSelectedRecipient(context.session);

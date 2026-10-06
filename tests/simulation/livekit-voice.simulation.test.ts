@@ -36,7 +36,7 @@ describe('deterministic live voice simulations', () => {
   it('keeps Spanish and English approval phrases explicit', () => {
     expect(simulateConversation({ interruption: false, decision: 'I confirm' }).at(-1)).toBe('confirmed');
     expect(simulateConversation({ interruption: false, decision: 'sí confirmo' }).at(-1)).toBe('confirmed');
-    expect(simulateConversation({ interruption: false, decision: 'yes' }).at(-1)).toBe('awaiting_confirmation');
+    expect(simulateConversation({ interruption: false, decision: 'yes' }).at(-1)).toBe('confirmed');
   });
 
   it('keeps durable confirmation available across reconnect recovery and typed fallback', () => {

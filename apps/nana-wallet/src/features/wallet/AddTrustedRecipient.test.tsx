@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createContact: vi.fn(),
   deleteContact: vi.fn(),
+  getContacts: vi.fn(),
   refetch: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock("@/lib/api", () => ({
   api: {
     createContact: (...args: unknown[]) => mocks.createContact(...args),
     deleteContact: (...args: unknown[]) => mocks.deleteContact(...args),
+    getContacts: () => mocks.getContacts(),
   },
   queryKeys: {
     contacts: (userId: string | undefined) => ["contacts", userId],
@@ -43,6 +45,7 @@ describe("AddTrustedRecipient (wallet-profile scope decision)", () => {
   beforeEach(() => {
     mocks.createContact.mockReset();
     mocks.deleteContact.mockReset();
+    mocks.getContacts.mockReset().mockResolvedValue([]);
     mocks.refetch.mockReset().mockResolvedValue(CONTACT);
   });
 
@@ -76,6 +79,36 @@ describe("AddTrustedRecipient (wallet-profile scope decision)", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Nombre")).not.toBeInTheDocument();
     });
+  });
+
+  it("saves and displays an explicitly selected Solana devnet contact", async () => {
+    const solanaContact = { ...CONTACT, network: "solana-devnet" as const };
+    mocks.createContact.mockResolvedValue(solanaContact);
+    mocks.getContacts.mockResolvedValue([solanaContact]);
+    render(
+      <Wrapper>
+        <AddTrustedRecipient userId="u1" onContactsChanged={mocks.refetch} />
+      </Wrapper>,
+    );
+
+    await userEvent.click(screen.getByTestId("add-recipient"));
+    await userEvent.type(screen.getByLabelText("Nombre"), "Ana");
+    await userEvent.type(
+      screen.getByLabelText("Dirección"),
+      "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    );
+    await userEvent.selectOptions(screen.getByLabelText("Red de la dirección"), "solana-devnet");
+    await userEvent.click(screen.getByRole("button", { name: "Guardar" }));
+
+    await waitFor(() => {
+      expect(mocks.createContact).toHaveBeenCalledWith({
+        name: "Ana",
+        description: "",
+        address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        network: "solana-devnet",
+      });
+    });
+    expect(await screen.findByText("Solana devnet")).toBeInTheDocument();
   });
 
   it("surfaces a recoverable error without losing the form", async () => {
