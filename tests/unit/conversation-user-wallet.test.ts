@@ -114,9 +114,22 @@ describe("conversation per-user wallet selection", () => {
       text: "¿Cuál es mi saldo?",
     });
 
-    expect(resolveWallet).toHaveBeenCalledWith(USER_ID);
+    expect(resolveWallet).toHaveBeenCalledWith(USER_ID, "ethereum");
     expect(fixtureBalance).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("42.5");
     expect(result.status).toBe("error");
+  });
+
+  it("passes the configured Solana chain family to deferred wallet resolution", async () => {
+    process.env.WDK_NETWORK = "solana-devnet";
+    const { service, resolveWallet } = serviceWithUnavailableUserWallet();
+
+    await service.handleTurn({
+      conversationId: CONVERSATION_ID,
+      userId: USER_ID,
+      text: "¿Cuál es mi saldo?",
+    });
+
+    expect(resolveWallet).toHaveBeenCalledWith(USER_ID, "solana");
   });
 });

@@ -47,6 +47,7 @@
     "@livekit/agents-plugin-openai": "^1.7.1",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@privy-io/node": "0.34.0",
+    "@solana/web3.js": "1.98.4",
     "@tetherto/wdk": "1.0.0-beta.14",
     "@tetherto/wdk-cli": "1.0.0-beta.2",
     "@tetherto/wdk-wallet-evm": "1.0.0-beta.11",

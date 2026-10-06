@@ -31,7 +31,10 @@ const repoRoot = path.resolve(__dirname, "..");
 const tmpDir = path.join(repoRoot, "tests", "e2e", "browser", ".tmp");
 
 const BACKEND_URL = "http://127.0.0.1:3123";
-const FRONTEND_URL = "http://127.0.0.1:5199";
+const PORTLESS_NAME = process.env.NANA_E2E_PORTLESS_NAME;
+const FRONTEND_URL = process.env.NANA_E2E_FRONTEND_URL ??
+  (PORTLESS_NAME ? `https://${PORTLESS_NAME}.localhost` : "http://127.0.0.1:5199");
+const FRONTEND_ORIGIN = new URL(FRONTEND_URL).origin;
 const DEMO_USER_ID = "00000000-0000-4000-8000-000000000001";
 const RECIPIENT_ADDR = "0x9999999999999999999999999999999999999999";
 const CONTACT = {
@@ -52,7 +55,7 @@ const BACKEND_ENV = {
   RECIPIENT_MEMORY_ENABLED: "true",
   IDENTITY_PROVIDER: "demo",
   PORT: "3123",
-  CORS_ORIGINS: "http://127.0.0.1:5199,http://localhost:5199",
+  CORS_ORIGINS: `${FRONTEND_ORIGIN},http://localhost:5199`,
   HOST: "127.0.0.1",
 };
 
@@ -181,8 +184,10 @@ async function run() {
 
   // ---- Spawn frontend ----
   const frontend = spawn(
-    "npm",
-    ["run", "dev", "--", "--port", "5199", "--host", "127.0.0.1"],
+    PORTLESS_NAME ? "portless" : "npm",
+    PORTLESS_NAME
+      ? [PORTLESS_NAME, "npm", "run", "dev", "--", "--host", "127.0.0.1"]
+      : ["run", "dev", "--", "--port", "5199", "--host", "127.0.0.1"],
     {
       cwd: path.join(repoRoot, "apps", "nana-wallet"),
       detached: true,

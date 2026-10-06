@@ -17,6 +17,7 @@ import {
 import { resolveDefaultAgentName } from "../config/livekit.js";
 import { FinancialTaskRegistry } from "../conversations/financial-task-registry.js";
 import { createWalletConversationService } from "../conversations/service.js";
+import { getWalletAgentConfig } from "../agent/instructions.js";
 import { getConfiguredRecipientMemoryService } from "../memory/runtime.js";
 import { createAgentSession } from "./create-agent-session.js";
 import { createRealtimeTools } from "./realtime-tools/index.js";
@@ -29,7 +30,23 @@ import {
   createWorkerDependencies,
   type WorkerDependencies,
 } from "../runtime/dependencies.js";
-import { bindWalletForUser } from "../wallet/privy-user-provider.js";
+import {
+  bindWalletForUser,
+  walletChainFamilyForNetwork,
+  type WalletForUser,
+} from "../wallet/privy-user-provider.js";
+
+export function bindLiveKitWalletForUser(
+  walletForUser: WalletForUser,
+  userId: string,
+  network: string | (() => string),
+) {
+  return bindWalletForUser(walletForUser, userId, () =>
+    walletChainFamilyForNetwork(
+      typeof network === "function" ? network() : network,
+    ),
+  );
+}
 
 export { readLiveKitWorkerConfig } from "../config/process.js";
 export type { LiveKitWorkerConfig } from "../config/process.js";
@@ -86,7 +103,11 @@ async function runJob(
     startSession: async (binding) => {
       const memoryService = getConfiguredRecipientMemoryService();
       const wallet = dependencies.walletForUser
-        ? bindWalletForUser(dependencies.walletForUser, binding.userId)
+        ? bindLiveKitWalletForUser(
+            dependencies.walletForUser,
+            binding.userId,
+            () => getWalletAgentConfig().network,
+          )
         : dependencies.wallet;
       // REVIEW FIX V3 (voice path): the voice service is built per binding so its
       // recipient memory runtime scopes to `binding.sub` — never the demo tenant.

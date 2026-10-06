@@ -251,6 +251,7 @@ let walletPermission: WalletPermissionResponse = {
   userId: me.userId,
   state: "active",
   perTransferUsdc: "10",
+  perTransferSol: "",
   rollingTotalUsdc: "50",
   rollingWindowSeconds: 3600,
   gasCeiling: "0.0002 ETH",

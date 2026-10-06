@@ -47,7 +47,31 @@ export class PrivyWalletRuntimeError extends Error {
   }
 }
 
-export type WalletForUser = (userId: string) => Promise<WalletProvider>;
+export type WalletChainFamily = "ethereum" | "solana";
+export type WalletChainFamilyHint =
+  WalletChainFamily | (() => WalletChainFamily);
+
+export type WalletForUser = (
+  userId: string,
+  chainFamily?: WalletChainFamilyHint,
+) => Promise<WalletProvider>;
+
+export function walletChainFamilyForNetwork(
+  network: string | undefined,
+): WalletChainFamily {
+  switch (network) {
+    case "arc-testnet":
+    case "sepolia":
+      return "ethereum";
+    case "solana-devnet":
+      return "solana";
+    default:
+      throw new PrivyWalletRuntimeError(
+        "wallet_config_error",
+        `Unsupported wallet network: ${network ?? "(missing)"}.`,
+      );
+  }
+}
 
 /**
  * Defers wallet discovery until a wallet method is actually called. This lets
@@ -57,8 +81,15 @@ export type WalletForUser = (userId: string) => Promise<WalletProvider>;
 export function bindWalletForUser(
   walletForUser: WalletForUser,
   userId: string,
+  chainFamily?: WalletChainFamilyHint,
 ): WalletProvider {
-  const resolve = () => walletForUser(userId);
+  const resolve = () => {
+    if (chainFamily === undefined) return walletForUser(userId);
+    return walletForUser(
+      userId,
+      typeof chainFamily === "function" ? chainFamily() : chainFamily,
+    );
+  };
   return {
     id: "privy-user-scoped",
     mode: "live",
@@ -209,7 +240,7 @@ export function createPrivyWalletForUserResolver(input: {
   };
 }
 
-async function readUserWalletSelection(
+export async function readUserWalletSelection(
   database: DatabaseClient,
   userId: string,
 ): Promise<UserWalletSelection> {

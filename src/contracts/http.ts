@@ -345,6 +345,7 @@ export const walletPermissionResponseSchema = z.object({
   userId: z.string().uuid(),
   state: permissionStateSchema,
   perTransferUsdc: z.string(),
+  perTransferSol: z.string(),
   rollingTotalUsdc: z.string(),
   rollingWindowSeconds: z.number().int(),
   gasCeiling: z.string(),
@@ -388,6 +389,7 @@ export const enrollmentPreparationResponseSchema = z.object({
   policyId: z.string(),
   quorumId: z.string(),
   perTransferUsdc: z.string(),
+  perTransferSol: z.string(),
   rollingTotalUsdc: z.string(),
   windowSeconds: z.number().int(),
   aggregationReady: z.literal(false),
@@ -509,6 +511,16 @@ export const createDelegatedGrantRequestSchema = z
     recipients: z.array(z.string().min(1)).max(50),
     // RFC 3339 timestamp; the grant MUST expire.
     expiresAt: z.string().datetime(),
+  })
+  .superRefine((grant, context) => {
+    if (grant.chain !== "solana") return;
+    if (BigInt(grant.maxPerTransfer) > 10_000_000n) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxPerTransfer"],
+        message: "Solana maxPerTransfer cannot exceed 0.01 SOL (10,000,000 lamports).",
+      });
+    }
   })
   .strict();
 export type CreateDelegatedGrantRequest = z.infer<typeof createDelegatedGrantRequestSchema>;

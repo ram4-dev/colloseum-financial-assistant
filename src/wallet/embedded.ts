@@ -1,5 +1,6 @@
 import type { DatabaseClient, Queryable } from "../db/client.js";
 import { isValidEvmAddress } from "../memory/address.js";
+import { PublicKey } from "@solana/web3.js";
 import {
   ARC_TESTNET_CHAIN_ID,
   ARC_USDC_ERC20,
@@ -18,6 +19,9 @@ import {
   ENROLLMENT_WINDOW_SECONDS,
   buildEnrollmentPolicyRules,
 } from "./enrollment-policy.js";
+import { buildSolanaEnrollmentRules } from "./grants/solana-enrollment-rules.js";
+
+const SOLANA_MAX_PER_TRANSFER_LAMPORTS = "10000000";
 import {
   PrivyServerClient,
   PrivyServerError,
@@ -118,6 +122,23 @@ export function validateGrantInput(input: GrantInput): void {
     if (!isValidEvmAddress(recipient))
       throw new GrantValidationError(`Invalid recipient address: ${recipient}`);
   }
+  validateGrantEnvelope(input);
+}
+
+/** Solana grant envelope: base58 recipients, same numeric limits as EVM. */
+export function validateSolanaGrantInput(input: GrantInput): void {
+  if (!Array.isArray(input.recipients) || input.recipients.length === 0) {
+    throw new GrantValidationError("At least one recipient is required.");
+  }
+  for (const recipient of input.recipients) {
+    if (!isValidSolanaAddress(recipient))
+      throw new GrantValidationError(`Invalid recipient address: ${recipient}`);
+  }
+  validateGrantEnvelope(input);
+}
+
+/** Shared numeric-envelope validation (amounts, window, gas ceiling). */
+function validateGrantEnvelope(input: GrantInput): void {
   if (!/^\d+$/u.test(input.perTransferAtomic6)) {
     throw new GrantValidationError(
       "Per-transfer limit must be a non-negative integer string.",
@@ -178,6 +199,7 @@ export type PermissionSummary = {
   grantId: string | null;
   state: PermissionState;
   perTransferUsdc: string;
+  perTransferSol: string;
   rollingTotalUsdc: string;
   rollingWindowSeconds: number;
   gasCeiling: string;
@@ -196,6 +218,7 @@ export type EnrollmentPreparation = {
   policyId: string;
   quorumId: string;
   perTransferUsdc: string;
+  perTransferSol: string;
   rollingTotalUsdc: string;
   windowSeconds: number;
   aggregationReady: false;
@@ -230,6 +253,7 @@ type WalletRow = {
   address: string;
   state: string;
   verified_at: string | Date | null;
+  provider_signer_id?: string | null;
 };
 
 type GrantRow = {
@@ -241,6 +265,7 @@ type GrantRow = {
   policy_hash: string;
   allowlisted_recipients: string[];
   per_transfer_atomic6: string;
+  per_transfer_lamports: string | null;
   rolling_total_atomic6: string;
   rolling_window_seconds: number;
   gas_ceiling: string;
@@ -250,7 +275,7 @@ type GrantRow = {
 const WALLET_COLUMNS =
   "id, user_id, provider, provider_wallet_id, chain_family, address, state, verified_at";
 const GRANT_COLUMNS =
-  "id, user_id, wallet_id, provider_policy_id, provider_signer_id, policy_hash, allowlisted_recipients, per_transfer_atomic6, rolling_total_atomic6, rolling_window_seconds, gas_ceiling, state";
+  "id, user_id, wallet_id, provider_policy_id, provider_signer_id, policy_hash, allowlisted_recipients, per_transfer_atomic6, per_transfer_lamports, rolling_total_atomic6, rolling_window_seconds, gas_ceiling, state";
 
 function iso(value: string | Date | null): string | null {
   if (value === null) return null;
@@ -272,13 +297,24 @@ function mapWallet(row: WalletRow): CurrentWallet {
 }
 
 /** Adapts a trusted server wallet record to the internal ProviderWallet shape. */
-function liveRecordToProviderWallet(record: PrivyWalletRecord): ProviderWallet {
+function liveRecordToProviderWallet(
+  record: PrivyWalletRecord,
+  chainFamily: string = "arc",
+): ProviderWallet {
   return {
     providerWalletId: record.id,
     address: record.address,
-    chainFamily: "arc",
+    chainFamily,
     state: "ready",
   };
+}
+
+function isValidSolanaAddress(address: string): boolean {
+  try {
+    return new PublicKey(address).toBase58() === address;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -298,19 +334,50 @@ export class EmbeddedWalletService {
     return Boolean(this.privyServer) || this.privy.mode === "live";
   }
 
-  private async currentWalletRow(
-    userId: string,
-    client: Queryable,
-  ): Promise<WalletRow | undefined> {
-    const result = await client.query<WalletRow>(
-      `SELECT ${WALLET_COLUMNS} FROM user_wallets
-       WHERE user_id = $1 AND chain_family = 'arc'
-       ORDER BY (state = 'ready') DESC, updated_at DESC
-       LIMIT 1`,
-      [userId],
-    );
-    return result.rows[0];
-  }
+      private async currentWalletRow(
+        userId: string,
+        client: Queryable,
+      ): Promise<WalletRow | undefined> {
+        const result = await client.query<WalletRow>(
+          `SELECT ${WALLET_COLUMNS} FROM user_wallets
+           WHERE user_id = $1 AND chain_family = 'arc'
+           ORDER BY (state = 'ready') DESC, updated_at DESC
+           LIMIT 1`,
+          [userId],
+        );
+        return result.rows[0];
+      }
+
+      /** Solana wallet row resolver (enrollment/sync Solana arm, task 2.6/2.7). */
+      private async currentSolanaWalletRow(
+        userId: string,
+        client: Queryable,
+      ): Promise<WalletRow | undefined> {
+        const result = await client.query<WalletRow>(
+          `SELECT ${WALLET_COLUMNS} FROM user_wallets
+           WHERE user_id = $1 AND chain_family = 'solana'
+           ORDER BY (state = 'ready') DESC, updated_at DESC
+           LIMIT 1`,
+          [userId],
+        );
+        return result.rows[0];
+      }
+
+      /**
+       * Resolves the enrollment wallet: the ready Solana row when one exists,
+       * otherwise the legacy Arc/EVM row. Keeps the EVM flow byte-identical
+       * while letting Solana consent enrollment address its own wallet.
+       */
+      private async enrollmentWalletRow(
+        userId: string,
+      ): Promise<CurrentWallet> {
+        const solana = await this.database.withUserTransaction(
+          userId,
+          (client) => this.currentSolanaWalletRow(userId, client),
+        );
+        if (solana) return mapWallet(solana);
+        return this.getCurrentWallet(userId);
+      }
 
   /** PEW-005: identity is separate from wallet readiness. */
   public async getCurrentWallet(userId: string): Promise<CurrentWallet> {
@@ -420,10 +487,26 @@ export class EmbeddedWalletService {
             "User identity is not provisioned; cannot verify wallet ownership.",
           );
 
-        let records: PrivyWalletRecord[];
+        let records: PrivyWalletRecord[] = [];
+        let solanaRecords: PrivyWalletRecord[] = [];
+        let ethereumUnavailable = false;
+        let solanaUnavailable = false;
         try {
           records = await this.privyServer!.listWalletsForUser(privyDid);
         } catch {
+          ethereumUnavailable = true;
+        }
+        try {
+          solanaRecords = await this.privyServer!.listWalletsForChain(
+            privyDid,
+            "solana",
+          );
+        } catch {
+          solanaUnavailable = true;
+        }
+
+        // Ethereum retains its historical outage demotion behavior.
+        if (ethereumUnavailable) {
           await this.demoteCurrentWallets(client, userId, "unavailable");
           return { kind: "unavailable" as const };
         }
@@ -433,8 +516,16 @@ export class EmbeddedWalletService {
               record.chain_type === "ethereum" &&
               isValidEvmAddress(record.address),
           )
-          .map(liveRecordToProviderWallet)
+          .map((record) => liveRecordToProviderWallet(record))
           .filter((wallet) => wallet.address.length > 0);
+        const solanaOwned = solanaRecords
+          .filter(
+            (record) =>
+              record.chain_type === "solana" &&
+              record.archived_at == null &&
+              isValidSolanaAddress(record.address),
+          )
+          .map((record) => liveRecordToProviderWallet(record, "solana"));
 
         if (opts.claimedAddress) {
           const matchesOwned = owned.some(
@@ -466,17 +557,61 @@ export class EmbeddedWalletService {
           created = { created: false, address: "" };
         }
 
+        // A Solana discovery outage blocks its binding changes but does not
+        // alter the already successful Ethereum reconciliation above.
+        if (solanaUnavailable) return { kind: "unavailable" as const };
+
+        let solanaCreated = { created: false, address: "" };
+        if (solanaOwned.length > 1) {
+          await this.demoteWalletsForChain(
+            client,
+            userId,
+            "solana",
+            "conflict",
+          );
+          await this.reconcileWalletRowsForChain(
+            client,
+            userId,
+            solanaOwned,
+            "conflict",
+          );
+        } else if (solanaOwned.length === 1) {
+          // Keep the one-ready-per-user-per-chain slot independent from Arc.
+          await this.demoteWalletsForChain(
+            client,
+            userId,
+            "solana",
+            "unavailable",
+          );
+          solanaCreated = await this.upsertReadyWalletForChain(
+            client,
+            userId,
+            solanaOwned[0],
+          );
+        }
+
         const row = await this.currentWalletRow(userId, client);
         return {
           kind: "success" as const,
           result: {
             userId,
-            state: (row?.state ??
-              (owned.length > 1
-                ? "conflict"
-                : "unprovisioned")) as WalletReadinessState,
-            address: row?.state === "ready" ? row.address : "",
-            created: created.created,
+            state: (solanaOwned.length > 1 || owned.length > 1
+              ? "conflict"
+              : row?.state === "ready"
+                ? "ready"
+                : solanaOwned.length === 1
+                  ? "ready"
+                  : row?.state ?? "unprovisioned") as WalletReadinessState,
+            // Preserve the legacy Arc-first response until task 2.8 callers
+            // carry explicit chain intent; otherwise expose the sole Solana
+            // address when no ready Arc row exists.
+            address:
+              row?.state === "ready"
+                ? row.address
+                : solanaOwned.length === 1
+                  ? solanaOwned[0].address
+                  : "",
+            created: created.created || solanaCreated.created,
           },
         };
       },
@@ -510,6 +645,52 @@ export class EmbeddedWalletService {
        WHERE user_id = $1 AND chain_family = 'arc'`,
       [userId, state],
     );
+  }
+
+  private async demoteWalletsForChain(
+    client: Queryable,
+    userId: string,
+    chainFamily: string,
+    state: "conflict" | "unavailable",
+  ): Promise<void> {
+    await client.query(
+      `UPDATE user_wallets
+       SET state = $3, verified_at = now(), updated_at = now()
+       WHERE user_id = $1 AND chain_family = $2`,
+      [userId, chainFamily, state],
+    );
+  }
+
+  private async reconcileWalletRowsForChain(
+    client: Queryable,
+    userId: string,
+    wallets: ProviderWallet[],
+    state: "conflict" | "unavailable",
+  ): Promise<void> {
+    for (const wallet of wallets) {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO user_wallets (user_id, provider, provider_wallet_id, chain_family, address, state, verified_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now())
+         ON CONFLICT (provider_wallet_id) DO UPDATE SET
+           address = EXCLUDED.address, state = EXCLUDED.state, verified_at = EXCLUDED.verified_at, updated_at = now()
+         WHERE user_wallets.user_id = EXCLUDED.user_id
+           AND user_wallets.chain_family = EXCLUDED.chain_family
+         RETURNING id`,
+        [
+          userId,
+          "privy",
+          wallet.providerWalletId,
+          wallet.chainFamily,
+          wallet.address,
+          state,
+        ],
+      );
+      if (!result.rows[0]) {
+        throw new WalletConflictError(
+          "A provider wallet id is already bound to another user or chain.",
+        );
+      }
+    }
   }
 
   private async reconcileWalletRows(
@@ -561,6 +742,41 @@ export class EmbeddedWalletService {
     );
     return {
       created: Boolean(result.rows[0]?.inserted),
+      address: wallet.address,
+    };
+  }
+
+  private async upsertReadyWalletForChain(
+    client: Queryable,
+    userId: string,
+    wallet: ProviderWallet,
+  ): Promise<{ created: boolean; address: string }> {
+    const result = await client.query<{ id: string; inserted: boolean }>(
+      `INSERT INTO user_wallets (user_id, provider, provider_wallet_id, chain_family, address, state, verified_at)
+       VALUES ($1, $2, $3, $4, $5, 'ready', now())
+       ON CONFLICT (provider_wallet_id) DO UPDATE SET
+         address = EXCLUDED.address,
+         state = 'ready',
+         verified_at = EXCLUDED.verified_at,
+         updated_at = now()
+       WHERE user_wallets.user_id = EXCLUDED.user_id
+         AND user_wallets.chain_family = EXCLUDED.chain_family
+       RETURNING id, (xmax = 0) AS inserted`,
+      [
+        userId,
+        "privy",
+        wallet.providerWalletId,
+        wallet.chainFamily,
+        wallet.address,
+      ],
+    );
+    if (!result.rows[0]) {
+      throw new WalletConflictError(
+        "A provider wallet id is already bound to another user or chain.",
+      );
+    }
+    return {
+      created: Boolean(result.rows[0].inserted),
       address: wallet.address,
     };
   }
@@ -669,7 +885,7 @@ export class EmbeddedWalletService {
     userId: string,
     recipients: string[],
   ): Promise<EnrollmentPreparation> {
-    const wallet = await this.getCurrentWallet(userId);
+    const wallet = await this.enrollmentWalletRow(userId);
     if (wallet.state !== "ready") {
       throw new WalletNotFoundError(
         `Wallet is not ready (state: ${wallet.state}).`,
@@ -693,8 +909,29 @@ export class EmbeddedWalletService {
     // aggregate is NOT in the policy and stays a visible pending feature
     // (aggregationReady:false) until the provider proves wallet-identity
     // grouping. The complete-readback still proves ownership + exact policy.
+    const isSolanaWallet = wallet.chainFamily === "solana";
+
+    // Solana consent enrollment (task 2.7): the policy is Solana-shaped and
+    // the pending grant must carry a DURABLE snapshot of the CURRENT remote
+    // signer ids (pre-consent) so complete can resolve exactly-one new id.
+    // Prepare retries preserve the original snapshot (restart-safe).
+    let snapshotJson: string | null = null;
+    if (isSolanaWallet) {
+      if (!this.privyServer) {
+        throw new WalletUnavailableError(
+          "Signer enrollment requires a configured Privy server client.",
+        );
+      }
+      const existingSignerIds = await this.remoteSignerIdsOf(
+        userId,
+        wallet,
+      );
+      snapshotJson = JSON.stringify({ signerIds: existingSignerIds });
+    }
+
     const input = defaultGrantInput(recipients);
-    validateGrantInput(input);
+    if (isSolanaWallet) validateSolanaGrantInput(input);
+    else validateGrantInput(input);
 
     // Reuse an existing pending grant's immutable policy id instead of
     // recreating a policy on every retry (idempotent prepare).
@@ -715,26 +952,42 @@ export class EmbeddedWalletService {
     if (existing?.provider_policy_id) {
       policyId = existing.provider_policy_id;
     } else {
-      const created = await this.privyServer.createPolicy(
-        `nana-signer-grant-${wallet.address}`,
-        buildEnrollmentPolicyRules({ recipients }),
-      );
+          const created = isSolanaWallet
+            ? await this.privyServer!.createPolicy(
+                `nana-signer-grant-${wallet.address}`,
+                buildSolanaEnrollmentRules({
+                  recipients,
+                  maxLamports: SOLANA_MAX_PER_TRANSFER_LAMPORTS,
+                }),
+                { chainType: "solana" },
+              )
+            : await this.privyServer.createPolicy(
+                `nana-signer-grant-${wallet.address}`,
+                buildEnrollmentPolicyRules({ recipients }),
+              );
       policyId = created.id;
       await this.database.withUserTransaction(userId, async (client) => {
         await client.query(
           `INSERT INTO signer_grants
-               (user_id, wallet_id, provider_policy_id, policy_hash, allowlisted_recipients, per_transfer_atomic6, rolling_total_atomic6, rolling_window_seconds, gas_ceiling, state)
-               VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, 'pending')`,
+               (user_id, wallet_id, provider_policy_id, policy_hash, allowlisted_recipients, per_transfer_atomic6, per_transfer_lamports, rolling_total_atomic6, rolling_window_seconds, gas_ceiling, state, signer_enrollment_snapshot)
+               VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, 'pending', $11::jsonb)`,
           [
             userId,
             wallet.id,
             policyId,
-            deterministicPolicyHash(input),
+            deterministicPolicyHash(
+              input,
+              isSolanaWallet
+                ? { unit: "solana-lamports", amount: SOLANA_MAX_PER_TRANSFER_LAMPORTS }
+                : undefined,
+            ),
             JSON.stringify(input.recipients),
             input.perTransferAtomic6,
+            isSolanaWallet ? SOLANA_MAX_PER_TRANSFER_LAMPORTS : null,
             input.rollingTotalAtomic6,
             input.rollingWindowSeconds,
             input.gasCeiling,
+            snapshotJson,
           ],
         );
       });
@@ -745,11 +998,14 @@ export class EmbeddedWalletService {
       walletAddress: wallet.address,
       policyId,
       quorumId: this.enrollment.keyQuorumId,
-      perTransferUsdc: ENROLLMENT_PER_TRANSFER_USDC,
-      rollingTotalUsdc: ENROLLMENT_ROLLING_TOTAL_USDC,
+      perTransferUsdc: isSolanaWallet ? "" : ENROLLMENT_PER_TRANSFER_USDC,
+      perTransferSol: isSolanaWallet ? "0.01" : "",
+      rollingTotalUsdc: isSolanaWallet ? "" : ENROLLMENT_ROLLING_TOTAL_USDC,
       windowSeconds: ENROLLMENT_WINDOW_SECONDS,
       aggregationReady: false,
-      aggregateBlockReason: AGGREGATION_BLOCK_REASON,
+      aggregateBlockReason: isSolanaWallet
+        ? "El límite acumulado en SOL todavía no está activo. El máximo por transferencia es 0.01 SOL."
+        : AGGREGATION_BLOCK_REASON,
     };
   }
 
@@ -776,7 +1032,8 @@ export class EmbeddedWalletService {
       async (client) => {
         const result = await client.query<GrantRow>(
           `SELECT ${GRANT_COLUMNS} FROM signer_grants
-               WHERE wallet_id = $1 AND user_id = $2 AND state = 'pending'
+               WHERE wallet_id = $1 AND user_id = $2
+                 AND state IN ('pending', 'active')
                ORDER BY updated_at DESC LIMIT 1`,
           [walletId, userId],
         );
@@ -804,13 +1061,39 @@ export class EmbeddedWalletService {
 
     const privyDid = await this.privyDidOf(userId);
 
-    let serverWallet: PrivyWalletRecord;
-    try {
-      serverWallet = await this.privyServer.getVerifiedWalletForUser(
-        privyDid,
-        walletRow.provider_wallet_id,
-      );
-    } catch (error) {
+        let serverWallet: PrivyWalletRecord;
+        try {
+          if (walletRow.chain_family === "solana") {
+            // Chain-aware readback: the Ethereum listing filters by
+            // chain_type=ethereum and would never return a Solana record.
+            const records = await this.privyServer.listWalletsForChain(
+              privyDid,
+              "solana",
+            );
+            const found = records.find(
+              (candidate) => candidate.id === walletRow.provider_wallet_id,
+            );
+            if (!found) {
+              return {
+                verified: false,
+                state: (grant.state as PermissionState) ?? "pending",
+                permission: null,
+                observed: {
+                  walletOwnerMatches: false,
+                  policyAttached: false,
+                  observedPolicyIds: [],
+                  observedSignerIds: [],
+                },
+              };
+            }
+            serverWallet = found;
+          } else {
+            serverWallet = await this.privyServer.getVerifiedWalletForUser(
+              privyDid,
+              walletRow.provider_wallet_id,
+            );
+          }
+        } catch (error) {
       if (error instanceof PrivyServerError && error.status === 404) {
         // A wallet we cannot read back is NOT proof of attachment.
         return {
@@ -831,15 +1114,31 @@ export class EmbeddedWalletService {
     }
 
     const signers = serverWallet.additional_signers;
-    const observedPolicyIds = signers.flatMap((signer) =>
-      PrivyServerClient.signerPolicyIds(signer),
-    );
-    const observedSignerIds = signers
-      .map((signer) => PrivyServerClient.signerId(signer))
-      .filter((value): value is string => Boolean(value));
-    // Reaching this point proves ownership through the trusted user filter.
-    const ownerMatches = true;
-    const matchingSigner = signers.find(
+        const observedPolicyIds = signers.flatMap((signer) =>
+          PrivyServerClient.signerPolicyIds(signer),
+        );
+        const observedSignerIds = signers
+          .map((signer) => PrivyServerClient.signerId(signer))
+          .filter((value): value is string => Boolean(value));
+        // Reaching this point proves ownership through the trusted user filter.
+        const ownerMatches = true;
+
+        // Solana consent enrollment (task 2.7): identity is resolved from an
+        // already-verified canonical id, or from exactly-one NEW signer id vs
+        // the prepare snapshot. Policy attachment happens server-side through
+        // the signed mutation and its exact readback BEFORE any persistence.
+        if (walletRow.chain_family === "solana") {
+          return this.completeSolanaPermission(
+            userId,
+            grant,
+            walletRow,
+            serverWallet,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+
+        const matchingSigner = signers.find(
       (signer) =>
         grant.provider_policy_id !== null &&
         PrivyServerClient.signerPolicyIds(signer).includes(
@@ -890,8 +1189,308 @@ export class EmbeddedWalletService {
     };
   }
 
-  /** Resolves the caller's privy_did from the users table (RLS-scoped). */
-  private async privyDidOf(userId: string): Promise<string> {
+      /**
+       * Reads the CURRENT remote signer ids of the wallet through the trusted
+       * authenticated server listing. Used by prepare to snapshot the
+       * pre-consent signer set. Fail-closed: listing failure throws.
+       */
+      private async remoteSignerIdsOf(
+        userId: string,
+        wallet: CurrentWallet,
+      ): Promise<string[]> {
+        const privyDid = await this.privyDidOf(userId);
+        const row = await this.database.withUserTransaction(
+          userId,
+          async (client) => {
+            const result = await client.query<{ provider_wallet_id: string }>(
+              "SELECT provider_wallet_id FROM user_wallets WHERE id = $1 AND user_id = $2",
+              [wallet.id, userId],
+            );
+            return result.rows[0];
+          },
+        );
+        if (!row) {
+          throw new WalletNotFoundError(
+            "Solana wallet row disappeared during enrollment prepare.",
+          );
+        }
+        const records = await this.privyServer!.listWalletsForChain(
+          privyDid,
+          "solana",
+        );
+        const record = records.find(
+          (candidate) => candidate.id === row.provider_wallet_id,
+        );
+        if (!record) {
+          throw new WalletUnavailableError(
+            "Solana wallet could not be read back during enrollment prepare.",
+          );
+        }
+        return record.additional_signers
+          .map((signer) => PrivyServerClient.signerId(signer))
+          .filter((value): value is string => Boolean(value));
+      }
+
+      /**
+       * Solana consent-enrollment completion (task 2.7). Resolution order:
+       *   1. A verified canonical `provider_signer_id` on the wallet row is
+       *      REUSED after remote readback (exact match required, never
+       *      re-selected). A grant policy attached to it activates.
+       *   2. Otherwise the signer set is diffed against the durable prepare
+       *      snapshot: EXACTLY ONE new id carrying the pending policy id may be
+       *      bound after the signed server-side attach + readback. If the new
+       *      signer does not yet carry the policy, attach it via
+       *      `addPolicyToSigner` (complete-list mutation + readback) first.
+       *   3. Zero new ids stays pending; multiple is a conflict. Any attach or
+       *      readback failure writes NO binding and keeps the grant pending.
+       */
+      private async completeSolanaPermission(
+        userId: string,
+        grant: GrantRow,
+        walletRow: WalletRow,
+        serverWallet: PrivyWalletRecord,
+        observedPolicyIds: string[],
+        observedSignerIds: string[],
+      ): Promise<EnrollmentVerification> {
+        const policyId = grant.provider_policy_id;
+        if (!policyId) {
+          // A pending grant without a policy id can never activate.
+          return this.unverifiedSolanaOutcome(
+            grant,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+
+        const signers = serverWallet.additional_signers;
+
+        // 1. Reuse the verified canonical signer after remote readback.
+        if (walletRow.provider_signer_id) {
+          const matches = signers.filter(
+            (signer) =>
+              PrivyServerClient.signerId(signer) === walletRow.provider_signer_id,
+          );
+          if (matches.length !== 1) {
+            // Stored signer absent or ambiguous remotely: fail closed.
+            return this.unverifiedSolanaOutcome(
+              grant,
+              observedPolicyIds,
+              observedSignerIds,
+            );
+          }
+          const canonical = matches[0]!;
+          if (
+            !PrivyServerClient.signerPolicyIds(canonical).includes(policyId)
+          ) {
+            return this.unverifiedSolanaOutcome(
+              grant,
+              observedPolicyIds,
+              observedSignerIds,
+            );
+          }
+          return this.activateSolanaGrant(
+            userId,
+            grant,
+            walletRow.provider_signer_id,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+
+        // 2. Diff vs the durable prepare snapshot.
+        const snapshotSignerIds = await this.prepareSnapshotSignerIds(
+          userId,
+          grant.id,
+        );
+        const newSigners = snapshotSignerIds
+          ? signers.filter((signer) => {
+              const id = PrivyServerClient.signerId(signer);
+              return Boolean(id) && !snapshotSignerIds.includes(id!);
+            })
+          : signers.filter((signer) =>
+              PrivyServerClient.signerPolicyIds(signer).includes(policyId),
+            );
+
+        if (newSigners.length !== 1) {
+          // Zero new signers stays pending; multiple is a conflict.
+          return this.unverifiedSolanaOutcome(
+            grant,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+        const candidate = newSigners[0]!;
+        const candidateId = PrivyServerClient.signerId(candidate) ?? null;
+        if (!candidateId) {
+          return this.unverifiedSolanaOutcome(
+            grant,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+
+        // 3. Signed server-side attach + exact readback BEFORE persistence.
+        if (!PrivyServerClient.signerPolicyIds(candidate).includes(policyId)) {
+          try {
+            await this.privyServer!.addPolicyToSigner(
+              walletRow.provider_wallet_id,
+              candidateId,
+              policyId,
+            );
+          } catch {
+            // Attach failed or was uncertain: write NOTHING.
+            return this.unverifiedSolanaOutcome(
+              grant,
+              observedPolicyIds,
+              observedSignerIds,
+            );
+          }
+          // Read back the complete wallet after the signed mutation.
+          let readback: PrivyWalletRecord;
+          try {
+            readback = await this.privyServer!.getVerifiedWalletForUser(
+              await this.privyDidOf(userId),
+              walletRow.provider_wallet_id,
+            );
+          } catch {
+            return this.unverifiedSolanaOutcome(
+              grant,
+              observedPolicyIds,
+              observedSignerIds,
+            );
+          }
+          const postSigners = readback.additional_signers;
+          const postMatches = postSigners.filter(
+            (signer) => PrivyServerClient.signerId(signer) === candidateId,
+          );
+          if (
+            postMatches.length !== 1 ||
+            !PrivyServerClient.signerPolicyIds(postMatches[0]!).includes(
+              policyId,
+            )
+          ) {
+            return this.unverifiedSolanaOutcome(
+              grant,
+              observedPolicyIds,
+              observedSignerIds,
+            );
+          }
+        }
+
+        return this.activateSolanaGrant(
+          userId,
+          grant,
+          candidateId,
+          observedPolicyIds,
+          observedSignerIds,
+        );
+      }
+
+      /** Honest not-verified outcome preserving the pending grant state. */
+      private unverifiedSolanaOutcome(
+        grant: GrantRow,
+        observedPolicyIds: string[],
+        observedSignerIds: string[],
+      ): EnrollmentVerification {
+        return {
+          verified: false,
+          state: (grant.state as PermissionState) ?? "pending",
+          permission: null,
+          observed: {
+            walletOwnerMatches: true,
+            policyAttached: false,
+            observedPolicyIds,
+            observedSignerIds,
+          },
+        };
+      }
+
+      /** Reads the durable prepare snapshot from the pending grant row. */
+      private async prepareSnapshotSignerIds(
+        userId: string,
+        grantId: string,
+      ): Promise<string[] | null> {
+        return this.database.withUserTransaction(userId, async (client) => {
+          const result = await client.query<{
+            signer_enrollment_snapshot: unknown;
+          }>(
+            "SELECT signer_enrollment_snapshot FROM signer_grants WHERE id = $1 AND user_id = $2",
+            [grantId, userId],
+          );
+          const raw = result.rows[0]?.signer_enrollment_snapshot;
+          if (!raw || typeof raw !== "object") return null;
+          const ids = (raw as { signerIds?: unknown }).signerIds;
+          return Array.isArray(ids) && ids.every((id) => typeof id === "string")
+            ? (ids as string[])
+            : null;
+        });
+      }
+
+      /** Persists the canonical binding and activates the grant atomically. */
+      private async activateSolanaGrant(
+        userId: string,
+        grant: GrantRow,
+        signerId: string,
+        observedPolicyIds: string[],
+        observedSignerIds: string[],
+      ): Promise<EnrollmentVerification> {
+        const active = await this.database.withUserTransaction(
+          userId,
+          async (client) => {
+            // Bind only if still empty. If another complete request won the
+            // race, allow an exact same-id retry but never activate against a
+            // different canonical signer.
+            const binding = await client.query<{ provider_signer_id: string }>(
+              `UPDATE user_wallets SET provider_signer_id = $3, updated_at = now()
+               WHERE id = $1 AND user_id = $2 AND provider_signer_id IS NULL
+               RETURNING provider_signer_id`,
+              [grant.wallet_id, userId, signerId],
+            );
+            if (binding.rows.length === 0) {
+              const existing = await client.query<{
+                provider_signer_id: string | null;
+              }>(
+                `SELECT provider_signer_id FROM user_wallets
+                 WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+                [grant.wallet_id, userId],
+              );
+              if (existing.rows[0]?.provider_signer_id !== signerId) {
+                return null;
+              }
+            }
+            const updated = await client.query<GrantRow>(
+              `UPDATE signer_grants
+                   SET state = 'active', provider_signer_id = $3, updated_at = now()
+                   WHERE id = $1 AND user_id = $2
+                     AND state IN ('pending', 'active')
+                   RETURNING ${GRANT_COLUMNS}`,
+              [grant.id, userId, signerId],
+            );
+            return updated.rows[0] ?? null;
+          },
+        );
+        if (!active) {
+          return this.unverifiedSolanaOutcome(
+            grant,
+            observedPolicyIds,
+            observedSignerIds,
+          );
+        }
+        return {
+          verified: true,
+          state: "active",
+          permission: mapGrantSummary(userId, active),
+          observed: {
+            walletOwnerMatches: true,
+            policyAttached: true,
+            observedPolicyIds,
+            observedSignerIds,
+          },
+        };
+      }
+
+      /** Resolves the caller's privy_did from the users table (RLS-scoped). */
+      private async privyDidOf(userId: string): Promise<string> {
     return this.database.withUserTransaction(userId, async (client) => {
       const result = await client.query<{ privy_did: string }>(
         "SELECT privy_did FROM users WHERE id = $1",
@@ -980,9 +1579,18 @@ export class EmbeddedWalletService {
   }
 }
 
-function deterministicPolicyHash(input: GrantInput): string {
+function deterministicPolicyHash(
+  input: GrantInput,
+  override?: { unit: string; amount: string },
+): string {
+  const transferLimit = override
+    ? `${override.unit}|${override.amount}`
+    : input.perTransferAtomic6;
+  const material = override
+    ? `${transferLimit}|${input.rollingWindowSeconds}|${input.recipients.join(",")}`
+    : `${transferLimit}|${input.rollingTotalAtomic6}|${input.rollingWindowSeconds}|${input.gasCeiling}|${input.recipients.join(",")}`;
   return `pol_${Buffer.from(
-    `${input.perTransferAtomic6}|${input.rollingTotalAtomic6}|${input.rollingWindowSeconds}|${input.gasCeiling}|${input.recipients.join(",")}`,
+    material,
   ).toString("base64url")}`;
 }
 
@@ -996,6 +1604,7 @@ function mapGrantSummary(
       grantId: null,
       state: "unavailable",
       perTransferUsdc: "",
+      perTransferSol: "",
       rollingTotalUsdc: "",
       rollingWindowSeconds: 0,
       gasCeiling: "",
@@ -1009,8 +1618,18 @@ function mapGrantSummary(
     userId,
     grantId: row.id,
     state: row.state as PermissionState,
-    perTransferUsdc: atomic6ToUsdc(row.per_transfer_atomic6),
-    rollingTotalUsdc: atomic6ToUsdc(row.rolling_total_atomic6),
+    perTransferUsdc:
+      row.per_transfer_lamports == null
+        ? atomic6ToUsdc(row.per_transfer_atomic6)
+        : "",
+    perTransferSol:
+      row.per_transfer_lamports == null
+        ? ""
+        : lamportsToSol(row.per_transfer_lamports),
+    rollingTotalUsdc:
+      row.per_transfer_lamports == null
+        ? atomic6ToUsdc(row.rolling_total_atomic6)
+        : "",
     rollingWindowSeconds: Number(row.rolling_window_seconds),
     gasCeiling: row.gas_ceiling,
     recipients: row.allowlisted_recipients ?? [],
@@ -1020,8 +1639,20 @@ function mapGrantSummary(
     // PEW-014: aggregation is provider-unproven (parent gate); block payments
     // until wallet-identity group_by is proven.
     aggregationReady: false,
-    aggregateBlockReason: AGGREGATION_BLOCK_REASON,
+    aggregateBlockReason: row.per_transfer_lamports == null
+      ? AGGREGATION_BLOCK_REASON
+      : "El límite acumulado en SOL todavía no está activo. El máximo por transferencia es 0.01 SOL.",
   };
+}
+
+function lamportsToSol(lamports: string): string {
+  const value = BigInt(lamports);
+  const whole = value / 1_000_000_000n;
+  const fraction = (value % 1_000_000_000n)
+    .toString()
+    .padStart(9, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
 export const PINNED = {

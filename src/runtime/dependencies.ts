@@ -5,6 +5,12 @@ import {
 } from "../agent/wdk-tools.js";
 import type { Tool } from "ai";
 import { FixtureWalletProvider } from "../wallet/fixture-provider.js";
+import {
+  SOLANA_DEVNET_NETWORK,
+  SolanaDevnetConfigError,
+  SolanaDevnetProvider,
+  readSolanaDevnetProviderConfig,
+} from "../wallet/solana-devnet-provider.js";
 import { WdkWalletProvider } from "../wallet/wdk-provider.js";
 import {
   ARC_TESTNET_NETWORK,
@@ -37,10 +43,12 @@ import { readIdentityProviderMode } from "../config/process.js";
 import { readPrivyServerConfig } from "../config/privy-server.js";
 import { PrivyServerClient } from "../wallet/privy-server-client.js";
 import {
+  PrivyWalletRuntimeError,
   createPrivyWalletForUserResolver,
   createUnavailablePrivyWalletResolver,
   type WalletForUser,
 } from "../wallet/privy-user-provider.js";
+import { createSolanaWalletForUser } from "../wallet/solana-user-wallet.js";
 
 export type CoreDependencies = {
   wallet: WalletProvider;
@@ -78,11 +86,26 @@ export function createConfiguredWalletForUser(
         })
       : undefined);
   if (!privyServer) return createUnavailablePrivyWalletResolver();
-  return createPrivyWalletForUserResolver({
+  const ethereumWalletForUser = createPrivyWalletForUserResolver({
     database,
     privy: privyServer,
     rpcUrl: environment.ARC_TESTNET_RPC_URL?.trim() || undefined,
   });
+  const solanaWalletForUser = createSolanaWalletForUser({
+    database,
+    privy: privyServer,
+    environment,
+  });
+  return async (userId, chainFamily) => {
+    const requestedChain =
+      typeof chainFamily === "function" ? chainFamily() : chainFamily;
+    if (requestedChain === "ethereum") return ethereumWalletForUser(userId);
+    if (requestedChain === "solana") return solanaWalletForUser(userId);
+    throw new PrivyWalletRuntimeError(
+      "wallet_config_error",
+      "Wallet chain family is required for per-user wallet resolution.",
+    );
+  };
 }
 
 export function createWalletProvider(
@@ -107,6 +130,26 @@ export function createWalletProvider(
     }
     return new CircleArcProvider(readCircleArcProviderConfig(environment));
   }
+  if (environment.WDK_TOOLS_SOURCE === "solana-devnet") {
+    // Devnet-only boot guard (same fail-closed discipline as circle-arc):
+    // a set-but-mismatched network or token would advertise a contract the
+    // devnet provider cannot serve, so refuse to boot.
+    const network = environment.WDK_NETWORK;
+    if (network !== undefined && network !== SOLANA_DEVNET_NETWORK) {
+      throw new SolanaDevnetConfigError(
+        `WDK_TOOLS_SOURCE=solana-devnet requires WDK_NETWORK=${SOLANA_DEVNET_NETWORK}; got "${network}".`,
+      );
+    }
+    const token = environment.WDK_TOKEN;
+    if (token !== undefined && token !== "SOL") {
+      throw new SolanaDevnetConfigError(
+        `WDK_TOOLS_SOURCE=solana-devnet requires WDK_TOKEN=SOL; got "${token}".`,
+      );
+    }
+    return new SolanaDevnetProvider(
+      readSolanaDevnetProviderConfig(environment),
+    );
+  }
   if (environment.WDK_TOOLS_SOURCE === "live") {
     return new WdkWalletProvider(getWdkTools, closeWdkClient);
   }
@@ -119,7 +162,8 @@ export function createCoreDependencies(
   const wallet = createWalletProvider(environment);
   const walletReads =
     environment.WDK_TOOLS_SOURCE === "live" ||
-    environment.WDK_TOOLS_SOURCE === "circle-arc"
+    environment.WDK_TOOLS_SOURCE === "circle-arc" ||
+    environment.WDK_TOOLS_SOURCE === "solana-devnet"
       ? wallet
       : new WdkWalletProvider(async () => legacyToolSource());
   const maxInputTokens = Number(

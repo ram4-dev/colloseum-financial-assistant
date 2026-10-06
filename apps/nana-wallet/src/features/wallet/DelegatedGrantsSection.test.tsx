@@ -70,16 +70,19 @@ describe("DelegatedGrantsSection", () => {
   });
 
   it("shows an active grant with its limits and allows revoking it", async () => {
-    mocks.listGrants.mockResolvedValue({ grants: [activeGrant()] });
+    mocks.listGrants.mockResolvedValue({
+      grants: [activeGrant({ maxPerTransfer: "10000000", maxCumulative: "50000000" })],
+    });
     render(
       <Wrapper>
         <DelegatedGrantsSection userId={USER_ID} />
       </Wrapper>,
     );
     expect(await screen.findByText("Activa")).toBeTruthy();
-    // Limits render locale-formatted by formatLimit.
-    expect(screen.getByText(/1\.000\.000|1000000/)).toBeTruthy();
-    expect(screen.getByText(/5\.000\.000|5000000/)).toBeTruthy();
+    // Solana grant limits are persisted as lamports and shown as SOL.
+    expect(screen.getByText(/0\.01/, { selector: "dd" })).toHaveTextContent("0.01 SOL");
+    expect(screen.getByText(/0\.05/, { selector: "dd" })).toHaveTextContent("0.05 SOL");
+    expect(screen.getByText("Tope máximo por transferencia: 0.01 SOL.")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: /Revocar autorización/i }));
     await waitFor(() => expect(mocks.revokeGrant).toHaveBeenCalledWith(GRANT_ID));
@@ -103,14 +106,68 @@ describe("DelegatedGrantsSection", () => {
       expect.objectContaining({
         action: "transfer",
         chain: "solana",
-        maxPerTransfer: "1000000",
-        maxCumulative: "5000000",
+        maxPerTransfer: "10000000",
+        maxCumulative: "50000000",
         windowSeconds: 86_400,
         recipients: ["9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"],
         expiresAt: expect.any(String),
       }),
     );
     expect(await screen.findByText(/pendiente: el proveedor todavía no permite/i)).toBeTruthy();
+  });
+
+  it("shows the fixed 0.01 SOL ceiling and rejects a larger transfer amount", async () => {
+    render(
+      <Wrapper>
+        <DelegatedGrantsSection userId={USER_ID} />
+      </Wrapper>,
+    );
+    await screen.findByText(/Todavía no tenés autorizaciones delegadas/i);
+    await userEvent.click(screen.getByText("Crear autorización", { selector: "summary" }));
+    expect(screen.getByText(/Tope por transferencia: 0\.01 SOL/i)).toBeTruthy();
+    await userEvent.clear(screen.getByRole("textbox", { name: "Máximo por transferencia" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Máximo por transferencia" }),
+      "0.010000001",
+    );
+    await userEvent.clear(screen.getByRole("textbox", { name: "Máximo acumulado por día" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Máximo acumulado por día" }), "0.02");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Direcciones autorizadas" }),
+      "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Crear autorización" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/0\.01 SOL/i);
+    expect(mocks.createGrant).not.toHaveBeenCalled();
+  });
+
+  it("converts decimal SOL to exact lamports without floating-point rounding", async () => {
+    render(
+      <Wrapper>
+        <DelegatedGrantsSection userId={USER_ID} />
+      </Wrapper>,
+    );
+    await screen.findByText(/Todavía no tenés autorizaciones delegadas/i);
+    await userEvent.click(screen.getByText("Crear autorización", { selector: "summary" }));
+    await userEvent.clear(screen.getByRole("textbox", { name: "Máximo por transferencia" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Máximo por transferencia" }),
+      "0.000000001",
+    );
+    await userEvent.clear(screen.getByRole("textbox", { name: "Máximo acumulado por día" }));
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Máximo acumulado por día" }),
+      "0.000000002",
+    );
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Direcciones autorizadas" }),
+      "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Crear autorización" }));
+    await waitFor(() => expect(mocks.createGrant).toHaveBeenCalledOnce());
+    expect(mocks.createGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPerTransfer: "1", maxCumulative: "2" }),
+    );
   });
 
   it("shows the revoked state without a revoke action", async () => {

@@ -20,12 +20,21 @@ export type GrantPolicyProvisioner = {
   provisionPolicy(input: {
     grantId: string;
     walletId: string;
+    userId: string;
+    chain: string;
     recipients: string[];
     maxPerTransfer: string;
     maxCumulative: string;
-    windowSeconds: number;
+    /** Stored ledger expiry (epoch seconds); never synthesized from a window. */
+    expiresAt: number;
   }): Promise<{ policyId: string }>;
-  revokePolicy(policyId: string): Promise<void>;
+  revokePolicy(input: {
+    grantId: string;
+    walletId: string;
+    userId: string;
+    chain: string;
+    policyId: string;
+  }): Promise<void>;
 };
 
 /**
@@ -88,6 +97,14 @@ export class PrivyPolicySyncService {
       if (!grant) {
         throw new Error(`Grant ${grantId} not found for this user.`);
       }
+      // Serialize policy sync per WALLET (ADR-2): provisions and revokes on
+      // sibling grants of the same wallet each PATCH a full-rule recompute,
+      // so unserialized syncs from different app instances can interleave
+      // and lose rules. Cross-instance serialization point; taken after the
+      // grant row is read because the key comes from the stored row.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `dgc-wallet-${grant.wallet_id}`,
+      ]);
       if (grant.state !== "active") {
         // A revoke can win the race between ledger creation and this post-commit
         // sync call. Never provision a policy for an already-revoked grant.
@@ -103,10 +120,14 @@ export class PrivyPolicySyncService {
         const { policyId } = await this.provisioner.provisionPolicy({
           grantId: grant.id,
           walletId: grant.wallet_id,
+          userId,
+          chain: grant.chain,
           recipients: grant.recipients as string[],
           maxPerTransfer: grant.max_per_transfer,
           maxCumulative: grant.max_cumulative,
-          windowSeconds: grant.window_seconds,
+          // The stored TIMESTAMPTZ expiry, projected as epoch seconds. The
+          // ledger expiry is authoritative; windowSeconds never synthesizes it.
+          expiresAt: Math.floor(grant.expires_at.getTime() / 1000),
         });
         await client.query(
           `UPDATE delegated_grants SET provider_policy_id = $2, updated_at = now()
@@ -170,12 +191,24 @@ export class PrivyPolicySyncService {
       if (!grant) {
         throw new Error(`Grant ${grantId} not found for this user.`);
       }
+      // Wallet-keyed advisory lock (ADR-2): serialize this revoke's full-rule
+      // recompute against concurrent provisions on sibling grants of the
+      // same wallet, across app instances.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+        `dgc-wallet-${grant.wallet_id}`,
+      ]);
       if (!grant.provider_policy_id) {
         // Nothing to remove: the ledger holds no enforcement binding.
         return { revoked: true };
       }
       try {
-        await this.provisioner.revokePolicy(grant.provider_policy_id);
+        await this.provisioner.revokePolicy({
+          grantId: grant.id,
+          walletId: grant.wallet_id,
+          userId,
+          chain: grant.chain,
+          policyId: grant.provider_policy_id,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await appendGrantAudit(
@@ -218,9 +251,11 @@ export class PrivyPolicySyncService {
     id: string;
     state: "active" | "revoked" | "expired";
     wallet_id: string;
+    chain: string;
     max_per_transfer: string;
     max_cumulative: string;
     window_seconds: number;
+    expires_at: Date;
     recipients: unknown;
     provider_policy_id: string | null;
   } | null> {
@@ -228,14 +263,16 @@ export class PrivyPolicySyncService {
       id: string;
       state: "active" | "revoked" | "expired";
       wallet_id: string;
+      chain: string;
       max_per_transfer: string;
       max_cumulative: string;
       window_seconds: number;
+      expires_at: Date;
       recipients: unknown;
       provider_policy_id: string | null;
     }>(
-      `SELECT id, state, wallet_id, max_per_transfer, max_cumulative, window_seconds,
-              recipients, provider_policy_id
+      `SELECT id, state, wallet_id, chain, max_per_transfer, max_cumulative, window_seconds,
+              expires_at, recipients, provider_policy_id
        FROM delegated_grants WHERE id = $1 AND user_id = $2 FOR UPDATE`,
       [grantId, userId],
     );

@@ -1,8 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { getWalletAgentConfig } from "../agent/instructions.js";
 import type { WalletProvider } from "../wallet/provider.js";
 import {
-  PRIVY_ARC_NETWORK,
   PrivyWalletRuntimeError,
+  walletChainFamilyForNetwork,
   type WalletForUser,
 } from "../wallet/privy-user-provider.js";
 import {
@@ -201,6 +202,7 @@ export async function registerWalletRoutes(
 ): Promise<void> {
   const resolveWallet = async (
     request: FastifyRequest,
+    network: string,
   ): Promise<{ provider: WalletProvider; wallet: string }> => {
     if (!dependencies.resolveUserId) {
       return { provider: dependencies.wallet, wallet: WALLET };
@@ -208,21 +210,28 @@ export async function registerWalletRoutes(
     const userId = await dependencies.resolveUserId(request);
     return {
       provider: dependencies.walletForUser
-        ? await dependencies.walletForUser(userId)
+        ? await dependencies.walletForUser(
+            userId,
+            walletChainFamilyForNetwork(network),
+          )
         : dependencies.wallet,
       wallet: dependencies.walletForUser ? userId : WALLET,
     };
   };
   const defaultNetwork = dependencies.walletForUser
-    ? PRIVY_ARC_NETWORK
+    ? getWalletAgentConfig().network
     : NETWORK;
   app.get(
     "/v1/wallet/address",
-    async (request, reply): Promise<WalletAddressResponse | void> => {
+    async (
+      request: FastifyRequest<{ Querystring: { network?: string } }>,
+      reply,
+    ): Promise<WalletAddressResponse | void> => {
       try {
-        const resolved = await resolveWallet(request);
+        const network = request.query.network ?? defaultNetwork;
+        const resolved = await resolveWallet(request, network);
         return resolved.provider.getAddress({
-          network: defaultNetwork,
+          network,
           wallet: resolved.wallet,
         });
       } catch (error) {
@@ -252,7 +261,7 @@ export async function registerWalletRoutes(
         });
       }
       try {
-        const resolved = await resolveWallet(request);
+        const resolved = await resolveWallet(request, parsed.data.network);
         const toolInput = { ...parsed.data, wallet: resolved.wallet };
         const address = await resolved.provider.getAddress({
           network: parsed.data.network,
@@ -287,7 +296,7 @@ export async function registerWalletRoutes(
         });
       }
       try {
-        const resolved = await resolveWallet(request);
+        const resolved = await resolveWallet(request, parsed.data.network);
         const history = await resolved.provider.getHistory({
           ...parsed.data,
           wallet: resolved.wallet,

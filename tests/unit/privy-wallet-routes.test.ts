@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWalletRoutes } from "../../src/api/wallet.js";
 import { PrivyIdentityError } from "../../src/auth/privy-identity.js";
 import { FixtureWalletProvider } from "../../src/wallet/fixture-provider.js";
@@ -33,7 +33,9 @@ function userProvider(address: string, atomicBalance: bigint) {
   );
 }
 
-async function createApp() {
+async function createApp(
+  walletForUser?: Parameters<typeof registerWalletRoutes>[1]["walletForUser"],
+) {
   const app = Fastify({ logger: false });
   const fixture = new FixtureWalletProvider();
   const fixtureBalance = vi.spyOn(fixture, "getBalance");
@@ -41,6 +43,18 @@ async function createApp() {
     [USER_A, userProvider(ADDRESS_A, 1_250_000n)],
     [USER_B, userProvider(ADDRESS_B, 9_000_000n)],
   ]);
+  const resolveWalletForUser =
+    walletForUser ??
+    (async (userId: string) => {
+      const provider = providers.get(userId);
+      if (!provider) {
+        throw new PrivyWalletRuntimeError(
+          "wallet_not_ready",
+          "No eligible Arc wallet is available for this user.",
+        );
+      }
+      return provider;
+    });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof PrivyIdentityError) {
       return reply.code(401).send({
@@ -60,21 +74,72 @@ async function createApp() {
       if (token === "Bearer user-no-wallet") return "no-wallet";
       throw new PrivyIdentityError("unauthenticated", "Missing bearer token.");
     },
-    walletForUser: async (userId) => {
-      const provider = providers.get(userId);
-      if (!provider) {
-        throw new PrivyWalletRuntimeError(
-          "wallet_not_ready",
-          "No eligible Arc wallet is available for this user.",
-        );
-      }
-      return provider;
-    },
+    walletForUser: resolveWalletForUser,
   });
   return { app, fixtureBalance };
 }
 
 describe("Privy user-scoped wallet HTTP routes", () => {
+  const previousIdentityProvider = process.env.IDENTITY_PROVIDER;
+
+  beforeEach(() => {
+    process.env.IDENTITY_PROVIDER = "privy";
+  });
+
+  afterEach(() => {
+    if (previousIdentityProvider === undefined) {
+      delete process.env.IDENTITY_PROVIDER;
+    } else {
+      process.env.IDENTITY_PROVIDER = previousIdentityProvider;
+    }
+  });
+
+  it("resolves the Solana chain when a wallet request names solana-devnet", async () => {
+    const provider = new FixtureWalletProvider();
+    const getAddress = vi.spyOn(provider, "getAddress").mockResolvedValue({
+      network: "solana-devnet",
+      address: "So11111111111111111111111111111111111111112",
+    });
+    const resolver = vi.fn(async () => provider);
+    const { app } = await createApp(resolver);
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/wallet/address?network=solana-devnet",
+        headers: { authorization: "Bearer user-a" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        network: "solana-devnet",
+        address: "So11111111111111111111111111111111111111112",
+      });
+      expect(getAddress).toHaveBeenCalledWith({
+        network: "solana-devnet",
+        wallet: USER_A,
+      });
+      expect(resolver).toHaveBeenCalledWith(USER_A, "solana");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed on an unsupported requested network before resolving a wallet", async () => {
+    const resolver = vi.fn(async () => userProvider(ADDRESS_A, 1_250_000n));
+    const { app } = await createApp(resolver);
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/wallet/balance?network=unknown-net",
+        headers: { authorization: "Bearer user-a" },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ code: "wallet_config_error" });
+      expect(resolver).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
   it("requires authentication and never reaches the shared fixture", async () => {
     const { app, fixtureBalance } = await createApp();
     try {
