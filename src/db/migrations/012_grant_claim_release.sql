@@ -1,0 +1,33 @@
+-- Slice 3 Phase 8 (AD-10): grant budget claims become RESERVATIONS released
+-- on definitive no-dispatch. Additive: released_at/released_reason on
+-- grant_claim_ledger mark a released reservation (NULL = held); the audit
+-- event CHECK gains 'released' for the compensating audit row; UPDATE grant
+-- on the claim table lets the user-scoped settlement (SET LOCAL ROLE
+-- recipient_app) CAS the exact row. Forced RLS user-isolation policies from
+-- 008 are unchanged and continue to apply.
+-- Supabase mirror: supabase/migrations/20260901001100_grant_claim_release.sql
+
+ALTER TABLE grant_claim_ledger
+  ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+ALTER TABLE grant_claim_ledger
+  ADD COLUMN IF NOT EXISTS released_reason TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'grant_audit_log_event_check'
+      AND conrelid = 'grant_audit_log'::regclass
+      AND contype = 'c'
+  ) THEN
+    RAISE EXCEPTION 'grant_audit_log_event_check not found: cannot extend the audit event CHECK';
+  END IF;
+END;
+$$;
+
+ALTER TABLE grant_audit_log DROP CONSTRAINT grant_audit_log_event_check;
+ALTER TABLE grant_audit_log ADD CONSTRAINT grant_audit_log_event_check
+  CHECK (event IN ('created', 'used', 'rejected', 'revoked', 'expired',
+                   'policy_synced', 'policy_sync_failed', 'released'));
+
+GRANT UPDATE ON grant_claim_ledger TO recipient_app;

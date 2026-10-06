@@ -60,6 +60,7 @@ import {
 import { registerWalletsRoutes } from "./api/wallets.js";
 import { registerGrantsRoutes } from "./api/grants.js";
 import { DelegatedGrantService } from "./wallet/grants/consumption.js";
+import { createGrantGate } from "./conversations/grant-gate.js";
 import { createGrantPolicySyncService } from "./wallet/grants/privy-policy-runtime.js";
 import { readPrivyServerConfig } from "./config/privy-server.js";
 import { PrivyServerClient } from "./wallet/privy-server-client.js";
@@ -212,6 +213,26 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
       ...(walletForUser ? { walletForUser } : {}),
       financialTasks,
       contextRenewal: core.contextRenewal,
+      // slice3-grant-execution: server-owned grant gate (original user
+      // turn path only; the service never consults it for model-tool
+      // previews). Requires the resolved chain-aware wallet seam; absent
+      // seam ⇒ no gate ⇒ today's unconditional preview + confirmation.
+      ...(walletForUser
+        ? {
+            grantGate: createGrantGate({
+              grants,
+              walletForUser,
+            }),
+            // AD-6: the atomic ledger claim is the sole execution
+            // authority; same grants service as the HTTP lifecycle.
+            grantLedger: {
+              claim: (input) => grants.claimConsumption(input),
+              // AD-10: atomic owned-CAS settlement (attempt CAS + ledger
+              // release + released audit) for definitive non-dispatch.
+              settle: (input) => grants.settleGrantReservation(input),
+            },
+          }
+        : {}),
       // PMU-014: memory scoped to the RESOLVED per-request user in every mode;
       // the fixed demo runtime (if configured) is only a fallback.
       ...(memory ? { memory } : {}),

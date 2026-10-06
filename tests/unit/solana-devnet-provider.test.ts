@@ -232,6 +232,42 @@ describe("SolanaDevnetProvider", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("AD-11: missing, empty, or whitespace previewId fails closed before RPC or signer calls", async () => {
+    for (const previewId of [undefined, "", "   "] as const) {
+      const rpc = rpcDouble();
+      const signAndSend = signerDouble();
+      const p = provider(rpc, signAndSend);
+      const outcome = await p.broadcastTransfer({
+        ...REQUEST,
+        previewId,
+      });
+      expect(outcome.kind).toBe("not_dispatched");
+      if (outcome.kind === "not_dispatched") {
+        expect(outcome.reason).toMatch(/preview/i);
+      }
+      // Fail closed BEFORE any dispatch seam: no recent blockhash read,
+      // no signing/broadcast, and no synthesized fallback reference.
+      expect(rpc.getRecentBlockhash).not.toHaveBeenCalled();
+      expect(signAndSend.signAndSend).not.toHaveBeenCalled();
+    }
+  });
+
+  it("AD-11: a valid previewId is used verbatim as the dispatch reference", async () => {
+    const rpc = rpcDouble();
+    const signAndSend = signerDouble();
+    const p = provider(rpc, signAndSend);
+    await p.broadcastTransfer(REQUEST); // REQUEST.previewId = "preview-1"
+    const dispatchMock = signAndSend.signAndSend as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    const calls = dispatchMock.mock.calls as Array<
+      [string, string, string, string]
+    >;
+    expect(calls).toHaveLength(1);
+    // Verbatim identity: no timestamp/random fallback reference.
+    expect(calls[0]?.[3]).toBe("preview-1");
+  });
+
   it("dispatches only via Privy signAndSendTransaction with auth signature and devnet caip2", async () => {
     const signAndSend = signerDouble();
     const p = provider(rpcDouble(), signAndSend);

@@ -162,7 +162,7 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     );
   });
 
-  it("aggregates only usage inside the rolling window", async () => {
+  it("aggregates only unreleased ledger reservations inside the rolling window (AD-10)", async () => {
     const userId = await provisionUser(database);
     const walletId = await provisionWallet(database, userId);
     const grant = await createGrant(userId, walletId);
@@ -172,37 +172,47 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     );
     expect(fresh).toBe("0");
 
-    await database.withUserTransaction(userId, (client) =>
-      appendGrantAudit(
-        database,
-        {
-          grantId: grant.id,
-          userId,
-          event: "used",
-          amount: "2_000_000",
-        },
-        client,
-      ),
-    );
-    // Backdate one usage row beyond the window via a second append + SQL update
-    // is impossible (append-only). Instead append 'used' now and verify the sum.
-    await database.withUserTransaction(userId, (client) =>
-      appendGrantAudit(
-        database,
-        {
-          grantId: grant.id,
-          userId,
-          event: "used",
-          amount: "1_500_000",
-        },
-        client,
-      ),
-    );
+    // AD-10: the window sum reads UNRELEASED grant_claim_ledger rows.
+    // Seed two real held reservations; also append the historical 'used'
+    // audit rows to prove the sum no longer reads grant_audit_log.
+    const seedReservation = async (amount: string): Promise<void> => {
+      await database.withUserTransaction(userId, (client) =>
+        client.query(
+          `INSERT INTO grant_claim_ledger (grant_id, user_id, idempotency_key, amount)
+                   VALUES ($1, $2, $3, $4)`,
+          [grant.id, userId, `seed-${randomUUID()}`, amount.replace(/_/g, "")],
+        ),
+      );
+      await database.withUserTransaction(userId, (client) =>
+        appendGrantAudit(
+          database,
+          { grantId: grant.id, userId, event: "used", amount },
+          client,
+        ),
+      );
+    };
+    await seedReservation("2_000_000");
+    await seedReservation("1_500_000");
 
     const consumed = await database.withUserTransaction(userId, (client) =>
       consumedInWindow(client, grant.id, WINDOW_SECONDS),
     );
+    // Both held reservations count: 2M + 1.5M.
     expect(consumed).toBe("3500000");
+
+    // Release the first reservation: it must STOP counting (the audit-row
+    // sum would still be 3.5M — proving the query reads the ledger).
+    await database.withUserTransaction(userId, (client) =>
+      client.query(
+        `UPDATE grant_claim_ledger SET released_at = now(), released_reason = 'not_dispatched'
+             WHERE grant_id = $1 AND amount = 2000000`,
+        [grant.id],
+      ),
+    );
+    const afterRelease = await database.withUserTransaction(userId, (client) =>
+      consumedInWindow(client, grant.id, WINDOW_SECONDS),
+    );
+    expect(afterRelease).toBe("1500000");
   });
 
   it("rejects audit UPDATE and DELETE (append-only trigger)", async () => {
@@ -257,7 +267,17 @@ describe("delegated grant consumption & audit (DGC-3)", () => {
     const userId = await provisionUser(database);
     const walletId = await provisionWallet(database, userId);
     const grant = await createPolicyReadyGrant(userId, walletId);
-    // Cap allows exactly one more transfer of MAX_PER_TRANSFER.
+    // Cap allows exactly one more transfer of MAX_PER_TRANSFER: seed a
+    // HELD 4M ledger reservation (AD-10: the claim window total counts
+    // unreleased grant_claim_ledger rows, not audit rows). The audit row
+    // mirrors it for the append-only trail.
+    await database.withUserTransaction(userId, (client) =>
+      client.query(
+        `INSERT INTO grant_claim_ledger (grant_id, user_id, idempotency_key, amount)
+                 VALUES ($1, $2, $3, $4)`,
+        [grant.id, userId, `seed-cap-${randomUUID()}`, "4000000"],
+      ),
+    );
     await database.withUserTransaction(userId, (client) =>
       appendGrantAudit(
         database,
