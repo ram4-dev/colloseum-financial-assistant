@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { lazy, Suspense, useState } from "react";
-import { RefreshCw, Wallet } from "lucide-react";
+import { Bell, RefreshCw, Wallet } from "lucide-react";
 
 import { RouteError, RoutePending } from "@/components/RouteStates";
 import { Button } from "@/components/ui/button";
 import { api, getErrorMessage, queryKeys } from "@/lib/api";
 import { formatUsdcBalance } from "@/lib/usdc-format";
 import { ARC_TESTNET_CHAIN_ID } from "@/lib/api-types";
+import { useNotificationsFeed } from "@/features/notifications/useNotificationsFeed";
 
 /**
  * wallet-profile (WP-010/WP-011/WP-012): identity plus the personal USDC
@@ -114,6 +115,7 @@ function ManageWalletSection({ userId }: { userId: string | undefined }) {
 function MiPlataPage() {
   const meQuery = useQuery({ queryKey: queryKeys.me, queryFn: api.getMe });
   const userId = meQuery.data?.userId;
+  const notifications = useNotificationsFeed();
 
   const balancesQuery = useQuery({
     queryKey: queryKeys.balances(userId, ARC_TESTNET_CHAIN_ID),
@@ -166,7 +168,23 @@ function MiPlataPage() {
 
   return (
     <main className="mx-auto max-w-md px-6 pt-12 pb-40">
-      <h1 className="text-2xl font-extrabold">Billetera</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-extrabold">Billetera</h1>
+        <Link
+          to="/notificaciones"
+          className="press inline-flex min-h-12 items-center gap-2 rounded-xl border border-border px-4 font-extrabold text-foreground"
+          aria-label={`Notificaciones${notifications.unreadCount ? `, ${notifications.unreadCount} sin leer` : ""}`}
+          data-testid="notifications-shortcut"
+        >
+          <Bell className="size-5" aria-hidden="true" />
+          Notificaciones
+          {notifications.unreadCount > 0 ? (
+            <span className="rounded-full bg-primary px-2 py-0.5 text-sm" aria-hidden="true">
+              {notifications.unreadCount}
+            </span>
+          ) : null}
+        </Link>
+      </div>
 
       {balances.walletState === "ready" ? (
         <section className="relative mt-5 overflow-hidden rounded-[2rem] border border-foreground bg-foreground px-7 py-6 text-background">

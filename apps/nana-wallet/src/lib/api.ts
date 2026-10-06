@@ -37,6 +37,7 @@ import type {
   WalletSummary,
   WalletBalanceResponse,
   WalletHistoryResponse,
+  NotificationFeedItem,
   WalletSyncResponse,
   EnrollmentCompleteInput,
   EnrollmentCompleteResponse,
@@ -425,6 +426,15 @@ export const api = {
   // user-scoped /v1/wallets endpoints.
   getCurrentWallet: () => request<CurrentWalletResponse>("/v1/wallets/current"),
 
+  getNotifications: () => request<NotificationFeedItem[]>("/v1/notifications"),
+
+  markNotificationRead: async (notificationId: string): Promise<void> => {
+    await request<undefined>(
+      `/v1/notifications/${encodeURIComponent(notificationId)}/read`,
+      jsonRequest("POST", {}),
+    );
+  },
+
   // WP-003/WP-004: personal USDC balance. No parameters are accepted by the
   // contract; the server resolves owner, chain and token itself.
   getBalances: () => request<BalancesData>("/v1/wallets/current/balances"),
@@ -681,6 +691,7 @@ export const queryKeys = {
   walletPermission: (userId: string | undefined) => ["wallet", "permission", userId] as const,
   contacts: (userId: string | undefined) => ["contacts", userId] as const,
   grants: (userId: string | undefined) => ["grants", userId] as const,
+  notifications: (userId: string | undefined) => ["notifications", userId] as const,
   agenda: (userId: string | undefined, from: string, to: string) =>
     ["agenda", userId, from, to] as const,
   bills: (userId: string | undefined) => ["bills", userId] as const,

@@ -58,6 +58,14 @@ import {
   type PrivyWalletApiClient,
 } from "./wallet/privy-client.js";
 import { registerWalletsRoutes } from "./api/wallets.js";
+import { registerProviderWebhookRoutes } from "./api/provider-webhooks.js";
+import { registerNotificationsFeedRoutes } from "./api/notifications.js";
+import { randomUUID } from "node:crypto";
+import { createDefaultSolanaDevnetReconciliationSource } from "./notifications/solana-reconciliation-source.js";
+import { startReconciliationWorker } from "./notifications/reconciliation-worker.js";
+import { dispatchPendingAssistantOutbox } from "./notifications/outbox-dispatcher.js";
+import { startAssistantOutboxWorker } from "./notifications/outbox-worker.js";
+import { createOptionalLiveKitInvalidationPublisher } from "./notifications/livekit-invalidation-publisher.js";
 import { registerGrantsRoutes } from "./api/grants.js";
 import { DelegatedGrantService } from "./wallet/grants/consumption.js";
 import { createGrantGate } from "./conversations/grant-gate.js";
@@ -86,6 +94,8 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
     logger: !process.env.VITEST,
     bodyLimit: 25 * 1024 * 1024,
   });
+  const backgroundNotificationWorkers: Array<{ stop: () => Promise<void> }> =
+    [];
 
   app.register(cors, {
     origin: resolveCorsOrigins(),
@@ -249,6 +259,10 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
     }
 
     app.addHook("onClose", async () => {
+      // Stop every DB-backed notifications worker before closing the pool.
+      // Keeping this in the same hook removes any dependence on Fastify hook
+      // ordering when the workers are registered later during construction.
+      for (const worker of backgroundNotificationWorkers) await worker.stop();
       await financialTasks.drain({ timeoutMs: 10_000 });
       if (core.walletReads !== core.wallet) await core.walletReads.close();
       await core.wallet.close();
@@ -266,6 +280,23 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
 
     // PMU-007: identity-only bootstrap.
     app.register(registerMeRoutes, { resolveUserId, database });
+
+    // Slice 5: authenticated notifications feed/read surface.
+    app.register(registerNotificationsFeedRoutes, {
+      resolveUserId,
+      database,
+    });
+
+    // Slice 5: signed provider webhook ingress. Raw-byte Svix verification
+    // is only reachable when the signing secret is configured; without it
+    // the route is intentionally absent (fail closed, no unverified path).
+    const providerWebhookSecret = process.env.PRIVY_WEBHOOK_SECRET?.trim();
+    if (database && providerWebhookSecret) {
+      app.register(registerProviderWebhookRoutes, {
+        database,
+        webhookSecret: providerWebhookSecret,
+      });
+    }
 
     // PMU-008..013: user-scoped contacts CRUD.
     app.register(registerContactsRoutes, {
@@ -285,6 +316,58 @@ export function buildServer(options: { privyServer?: PrivyServerClient } = {}) {
       void contactsEmbedder.prefetch().catch(() => {
         // Prefetch is an optimization; the first create loads on demand.
       });
+    });
+
+    // Slice 5: durable outbox dispatcher. Enabled by default with a database;
+    // tests opt out via VITEST and deployments may explicitly disable it.
+    // Fan-out is optional because polling the durable feed remains authoritative.
+    const outboxDispatcherEnabled =
+      database &&
+      process.env.NOTIFICATIONS_OUTBOX_ENABLED !== "false" &&
+      !process.env.VITEST;
+    app.addHook("onReady", async () => {
+      if (!outboxDispatcherEnabled) return;
+      const publishInvalidation = createOptionalLiveKitInvalidationPublisher();
+      const worker = startAssistantOutboxWorker({
+        dispatch: () =>
+          dispatchPendingAssistantOutbox({
+            database: database!,
+            ...(publishInvalidation ? { publishInvalidation } : {}),
+            batchSize: 100,
+          }),
+        intervalMs: 5_000,
+        backoffOptions: { baseSeconds: 2, maxSeconds: 60 },
+        onError: () => {
+          // Pending rows are durable and the worker retries with backoff. Avoid
+          // writing outbox payloads to application logs.
+        },
+      });
+      backgroundNotificationWorkers.push(worker);
+    });
+
+    // Slice 5: durable reconciliation worker (bounded devnet polling).
+    // Gated so tests (any truthy VITEST) and non-polling deployments
+    // never hit live RPC. Started inside onReady — never at build time —
+    // and stopped, awaiting in-flight work, in onClose.
+    const reconciliationEnabled =
+      database &&
+      process.env.NOTIFICATIONS_RECONCILIATION_ENABLED === "true" &&
+      !process.env.VITEST;
+    let reconciliationWorker: ReturnType<
+      typeof startReconciliationWorker
+    > | null = null;
+    app.addHook("onReady", async () => {
+      if (!reconciliationEnabled) return;
+      reconciliationWorker = startReconciliationWorker({
+        database: database!,
+        source: createDefaultSolanaDevnetReconciliationSource(),
+        workerId: `server-${randomUUID()}`,
+        pageSize: 100,
+        leaseSeconds: 300,
+        intervalMs: 30_000,
+        backoffOptions: { baseSeconds: 5, maxSeconds: 300 },
+      });
+      backgroundNotificationWorkers.push(reconciliationWorker);
     });
 
     // PEW-001..014: user-scoped embedded wallet surface. The fixture Privy

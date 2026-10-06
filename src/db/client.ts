@@ -53,6 +53,27 @@ export class DatabaseClient {
     }
   }
 
+  public async withSystemTransaction<T>(
+    operation: (client: Queryable) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL ROLE recipient_app");
+      // Starts in system context (no app.user_id): system-only ingestion
+      // policies apply. The operation may re-scope to a resolved owner via
+      // set_config('app.user_id', ...) inside the same transaction.
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   public async withUserTransaction<T>(
     userId: string,
     operation: (client: Queryable) => Promise<T>,

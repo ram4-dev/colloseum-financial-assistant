@@ -102,7 +102,12 @@ describe('POST /v1/agent/transcribe', () => {
 });
 
 describe('POST /v1/voice/speak', () => {
-  it('returns 500 when an ElevenLabs API key is not configured', async () => {
+  // Under parallel full-suite CI load, the server-injection cases in this
+  // group have exceeded Vitest's 5s default. The full file passes 8/8 in
+  // 3.07s locally; 15s gives the group headroom without masking regressions.
+  it('returns 500 when an ElevenLabs API key is not configured', {
+    timeout: 15_000,
+  }, async () => {
     delete process.env.ELEVENLABS_API_KEY;
     delete process.env.ELEVEN_LABS;
     delete process.env.ELEVEN_LABS_API_KEY;
@@ -117,7 +122,7 @@ describe('POST /v1/voice/speak', () => {
     await app.close();
   });
 
-  it('rejects an empty text field', async () => {
+  it('rejects an empty text field', { timeout: 15_000 }, async () => {
     process.env.ELEVEN_LABS = 'test-key';
     const app = buildServer();
     const res = await app.inject({
@@ -129,7 +134,9 @@ describe('POST /v1/voice/speak', () => {
     await app.close();
   });
 
-  it('forwards text upstream and streams back the audio bytes', async () => {
+  it('forwards text upstream and streams back the audio bytes', {
+    timeout: 15_000,
+  }, async () => {
     process.env.ELEVEN_LABS = 'test-key';
     const audioBytes = new Uint8Array([1, 2, 3, 4]);
     global.fetch = vi.fn(
